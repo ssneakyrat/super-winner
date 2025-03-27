@@ -14,11 +14,17 @@ matplotlib.use('Agg')  # Use non-interactive backend (avoid Qt dependency)
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 import io
-
+from utils.logging import prepare_audio_for_tensorboard
 from config.model_config import FutureVoxConfig
 from model.futurevox import FutureVox
 from utils.logging import plot_spectrogram_to_numpy, plot_alignment_to_numpy
 
+def safe_normalize(waveform, eps=1e-8):
+    """Safely normalize waveform to [-1, 1] range."""
+    peak = np.max(np.abs(waveform))
+    if peak > eps:
+        return waveform / peak
+    return waveform
 
 class FutureVoxLightning(pl.LightningModule):
     """PyTorch Lightning module for FutureVox."""
@@ -109,11 +115,19 @@ class FutureVoxLightning(pl.LightningModule):
             self.config.training.loss_weights.duration * losses["duration_loss"] +
             self.config.training.loss_weights.f0 * losses["f0_loss"] +
             self.config.training.loss_weights.mel * losses["mel_loss"] +
-            0.1 * losses["kl_loss"]  # Small weight for KL loss
+            0.1 * losses["kl_loss"].mean()  # Apply mean to reduce to scalar
         )
         
+        # Check for NaN values
+        if torch.isnan(total_loss) or torch.isinf(total_loss):
+            self.log("train/nan_detected", 1.0, prog_bar=True, batch_size=phonemes.size(0))
+            # Use a small constant loss to keep training going
+            total_loss = torch.tensor(1.0, device=self.device, requires_grad=True)
+        else:
+            self.log("train/nan_detected", 0.0, prog_bar=False, batch_size=phonemes.size(0))
+            
         # Log losses - ensure KL loss is a scalar by taking the mean
-        self.log("train/duration_loss", losses["duration_loss"], prog_bar=True)
+        self.log("train/duration_loss", losses["duration_loss"], prog_bar=True, batch_size=phonemes.size(0))
         self.log("train/f0_loss", losses["f0_loss"], prog_bar=True)
         self.log("train/mel_loss", losses["mel_loss"], prog_bar=True)
         self.log("train/kl_loss", losses["kl_loss"].mean(), prog_bar=False)  # Apply mean to reduce to scalar
@@ -225,21 +239,21 @@ class FutureVoxLightning(pl.LightningModule):
                 if gt_waveform is not None:
                     self.logger.experiment.add_audio(
                         f"val/audio_gt_{i}",
-                        gt_waveform / np.max(np.abs(gt_waveform)),
+                        prepare_audio_for_tensorboard(gt_waveform),
                         global_step=self.global_step,
                         sample_rate=sample_rate
                     )
                 
                 self.logger.experiment.add_audio(
                     f"val/audio_gt_pred_{i}",
-                    gt_pred_waveform / np.max(np.abs(gt_pred_waveform)),
+                    prepare_audio_for_tensorboard(gt_pred_waveform),
                     global_step=self.global_step,
                     sample_rate=sample_rate
                 )
                 
                 self.logger.experiment.add_audio(
                     f"val/audio_pred_{i}",
-                    pred_waveform / np.max(np.abs(pred_waveform)),
+                    prepare_audio_for_tensorboard(pred_waveform),
                     global_step=self.global_step,
                     sample_rate=sample_rate
                 )

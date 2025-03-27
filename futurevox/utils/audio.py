@@ -18,6 +18,15 @@ from typing import Optional, Union, Tuple
 
 from config.model_config import DataConfig
 
+def clean_mel_spectrogram(mel, replace_nan=True, min_value=-12, max_value=2):
+    """Clean a mel spectrogram by removing NaNs and clipping extreme values."""
+    if replace_nan:
+        mel = np.nan_to_num(mel, nan=min_value, posinf=max_value, neginf=min_value)
+    
+    # Clip to reasonable range
+    mel = np.clip(mel, min_value, max_value)
+    
+    return mel
 
 def load_audio(
     file_path: str,

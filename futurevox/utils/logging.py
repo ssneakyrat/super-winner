@@ -18,6 +18,20 @@ from typing import Optional, Union, List, Tuple
 # Configure logging
 logger = logging.getLogger('futurevox')
 
+def prepare_audio_for_tensorboard(waveform, eps=1e-8):
+    """Prepare audio for TensorBoard by handling NaNs and normalizing."""
+    # Replace NaN and Inf values
+    waveform = np.nan_to_num(waveform)
+    
+    # Clip to reasonable range
+    waveform = np.clip(waveform, -1e8, 1e8)
+    
+    # Normalize to [-0.99, 0.99] to avoid int16 overflow
+    peak = np.max(np.abs(waveform))
+    if peak > eps:
+        waveform = waveform / peak * 0.99
+    
+    return waveform
 
 def setup_logger(log_dir: str, log_file: str = 'futurevox.log', level: int = logging.INFO) -> None:
     """

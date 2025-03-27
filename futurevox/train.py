@@ -134,13 +134,10 @@ def main():
         num_workers=args.num_workers,
         limit_dataset_size=args.limit_dataset
     )
-    
-    print( f"fit:" )
 
     # Explicitly call setup to load phoneme dictionary
     data_module.setup("fit")
-    
-    print( f"AFTER FIT -----" )
+
     # Load phoneme dictionary to get vocabulary size
     phoneme_dict_path = os.path.join(data_dir, config.data.phoneme_dict_file)
     if os.path.exists(phoneme_dict_path):
