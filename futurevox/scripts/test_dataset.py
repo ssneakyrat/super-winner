@@ -17,7 +17,8 @@ from typing import Dict, List, Any, Optional
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config.model_config import FutureVoxConfig, DataConfig
-from data.dataset import LightSingerDataset
+# Fix import to use the correct module for LightSingerDataset
+from data.LightSingerDataset import LightSingerDataset
 
 
 def parse_args():
@@ -30,8 +31,8 @@ def parse_args():
     )
     
     parser.add_argument(
-        "--data_dir", type=str, required=True,
-        help="Path to data directory"
+        "--data_dir", type=str, default=None,
+        help="Path to data directory (default: use datasets_root from config)"
     )
     
     parser.add_argument(
@@ -177,11 +178,18 @@ def main():
         # Use default configuration
         config = FutureVoxConfig()
     
-    print(f"Testing dataset loading from directory: {args.data_dir}")
+    # Determine data directory - either from args or from config
+    if args.data_dir:
+        data_dir = args.data_dir
+    else:
+        data_dir = config.data.datasets_root
+        print(f"Using datasets_root from config: {data_dir}")
+    
+    print(f"Testing dataset loading from directory: {data_dir}")
     
     # Create dataset
     dataset = LightSingerDataset(
-        data_dir=args.data_dir,
+        data_dir=data_dir,
         config=config.data,
         split="train"  # Use train split for testing
     )

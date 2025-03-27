@@ -184,6 +184,9 @@ class LightSingerDataset(Dataset):
         sample_rate = self.config.sample_rate
         hop_size = self.config.hop_size
         
+        # Convert audio to float64 for pyworld
+        audio = audio.astype(np.float64)
+
         # Use WORLD vocoder for F0 extraction
         frame_period = hop_size / sample_rate * 1000  # Convert to ms
         
