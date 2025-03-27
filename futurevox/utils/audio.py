@@ -7,6 +7,8 @@ import os
 import numpy as np
 import librosa
 import librosa.display
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend (avoid Qt dependency)
 import matplotlib.pyplot as plt
 import soundfile as sf
 import torch

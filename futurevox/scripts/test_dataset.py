@@ -8,6 +8,8 @@ import sys
 import argparse
 import torch
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend (avoid Qt dependency)
 import matplotlib.pyplot as plt
 import librosa
 import librosa.display

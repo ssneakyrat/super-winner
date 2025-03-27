@@ -9,6 +9,8 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import ExponentialLR
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend (avoid Qt dependency)
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 import io

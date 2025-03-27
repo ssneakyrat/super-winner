@@ -8,11 +8,10 @@ import numpy as np
 import torch
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import Callback
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend (avoid Qt dependency)
+import matplotlib.pyplot as plt
 from typing import Dict, List, Optional, Any
-
-from config.model_config import FutureVoxConfig
-from utils.logging import plot_spectrogram_to_numpy, plot_alignment_to_numpy
-from utils.audio import save_audio
 
 
 class AudioLoggerCallback(Callback):
