@@ -14,19 +14,20 @@ import librosa
 from tqdm import tqdm
 from typing import Dict, List, Tuple, Set
 
+# Fix imports for running from futurevox/ directory
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config.model_config import FutureVoxConfig
+
 
 def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Prepare dataset for LightSinger")
     
     parser.add_argument(
-        "--input_dir", type=str, required=True,
-        help="Input directory containing .lab and .wav files"
-    )
-    
-    parser.add_argument(
-        "--output_dir", type=str, required=True,
-        help="Output directory for processed dataset"
+        "--config", type=str, default="./config/default.yaml",
+        help="Path to configuration file (default: ./config/default.yaml)"
     )
     
     parser.add_argument(
@@ -347,9 +348,26 @@ def main():
     # Parse arguments
     args = parse_args()
     
+    # Load configuration
+    config = FutureVoxConfig.from_yaml(args.config)
+    
+    # Get directories from config
+    output_dir = config.data.datasets_root
+    
+    # By convention, use a "raw" subdirectory in the same parent directory as datasets_root
+    parent_dir = os.path.dirname(os.path.abspath(output_dir))
+    input_dir = parent_dir #os.path.join(parent_dir, "raw")
+    
+    # Ensure input directory exists
+    if not os.path.exists(input_dir):
+        raise FileNotFoundError(f"Input directory not found: {input_dir}. Please create a 'raw' directory with your .lab and .wav files in {parent_dir}")
+    
+    print(f"Using input directory: {input_dir}")
+    print(f"Using output directory: {output_dir}")
+    
     # Find lab/wav pairs
-    print(f"Scanning directory: {args.input_dir}")
-    pairs = find_lab_wav_pairs(args.input_dir)
+    print(f"Scanning directory: {input_dir}")
+    pairs = find_lab_wav_pairs(input_dir)
     print(f"Found {len(pairs)} lab/wav pairs")
     
     # Validate pairs
@@ -371,19 +389,19 @@ def main():
     print(f"  Test: {len(test_pairs)} samples")
     
     # Create output directory
-    os.makedirs(args.output_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
     
     # Create phoneme dictionary
-    create_phoneme_dict(args.output_dir, pairs)
+    create_phoneme_dict(output_dir, pairs)
     
     # Generate dataset statistics
-    generate_stats(pairs, args.output_dir)
+    generate_stats(pairs, output_dir)
     
     # Process files
     if args.copy_files:
         # Copy files to output directory
         copy_files(
-            args.output_dir,
+            output_dir,
             train_pairs,
             val_pairs,
             test_pairs
@@ -391,15 +409,15 @@ def main():
     else:
         # Create filelists with relative paths
         create_filelists(
-            args.output_dir,
+            output_dir,
             train_pairs,
             val_pairs,
             test_pairs,
-            args.input_dir
+            input_dir
         )
     
     print(f"Dataset preparation complete!")
-    print(f"Output directory: {args.output_dir}")
+    print(f"Output directory: {output_dir}")
 
 
 if __name__ == "__main__":
