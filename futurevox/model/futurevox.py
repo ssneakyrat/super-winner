@@ -101,7 +101,8 @@ class DurationPredictor(nn.Module):
                     padding=(config.kernel_size - 1) // 2
                 ),
                 nn.ReLU(),
-                nn.LayerNorm(input_dim),
+                # Use GroupNorm instead of LayerNorm for Conv1D outputs
+                nn.GroupNorm(1, input_dim),  # 1 group = InstanceNorm behavior
                 nn.Dropout(config.dropout)
             )
         )
@@ -115,13 +116,39 @@ class DurationPredictor(nn.Module):
                     padding=(config.kernel_size - 1) // 2
                 ),
                 nn.ReLU(),
-                nn.LayerNorm(input_dim),
+                # Use GroupNorm instead of LayerNorm for Conv1D outputs
+                nn.GroupNorm(1, input_dim),  # 1 group = InstanceNorm behavior
                 nn.Dropout(config.dropout)
             )
         )
         
         # Projection to scalar output
         self.proj = nn.Linear(input_dim, 1)
+        
+    def forward(self, x):
+        """
+        Forward pass.
+        
+        Args:
+            x: Input features [B, L, H]
+            
+        Returns:
+            Log durations [B, L, 1]
+        """
+        # Transpose for 1D convolution
+        x_conv = x.transpose(1, 2)  # [B, H, L]
+        
+        # Apply convolution layers
+        for layer in self.conv_layers:
+            x_conv = layer(x_conv)
+        
+        # Transpose back
+        x = x_conv.transpose(1, 2)  # [B, L, H]
+        
+        # Project to scalar
+        log_durations = self.proj(x)  # [B, L, 1]
+        
+        return log_durations
         
     def forward(self, x):
         """
