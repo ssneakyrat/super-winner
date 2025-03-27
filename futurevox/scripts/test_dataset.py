@@ -71,7 +71,7 @@ def plot_and_save(item: Dict[str, Any], output_dir: str, item_id: str) -> None:
     plt.figure(figsize=(10, 4))
     plt.bar(range(len(durations)), durations)
     plt.title(f"Phoneme Durations - {item_id}")
-    plt.xlabel("Phoneme Index")
+    plt.xlabel(phonemes)
     plt.ylabel("Duration (frames)")
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, f"{item_id}_durations.png"))
