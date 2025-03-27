@@ -10,7 +10,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from pytorch_lightning.loggers import TensorBoardLogger
 
 from config.model_config import FutureVoxConfig
-from data.dataset import SVSDataModule
+from data.LightSingerDataset import LightSingerDataModule
 from training.lightning_model import FutureVoxLightning
 from utils.logging import setup_logger
 
@@ -117,7 +117,7 @@ def main():
     pl.seed_everything(config.training.seed)
     
     # Create data module
-    data_module = SVSDataModule(
+    data_module = LightSingerDataModule(
         data_dir=args.data_dir,
         config=config.data,
         batch_size=config.training.batch_size,
@@ -125,17 +125,17 @@ def main():
         limit_dataset_size=args.limit_dataset
     )
     
-    # Create model
-    if args.checkpoint:
-        model = FutureVoxLightning.load_from_checkpoint(
-            args.checkpoint,
-            config=config
-        )
-    else:
-        model = FutureVoxLightning(
-            config=config,
-            n_vocab=100  # Update this based on your phoneme vocabulary
-        )
+    data_module.setup()  # Force setup to load the phoneme dictionary
+    phoneme_dict_path = os.path.join(args.data_dir, config.data.phoneme_dict_file)
+    with open(phoneme_dict_path, "r") as f:
+        phoneme_dict = json.load(f)
+    n_vocab = len(phoneme_dict) + 1  # +1 for padding/unknown token
+
+    # Then create the model with the correct vocabulary size
+    model = FutureVoxLightning(
+        config=config,
+        n_vocab=n_vocab
+    )
     
     # Create callbacks
     callbacks = [
