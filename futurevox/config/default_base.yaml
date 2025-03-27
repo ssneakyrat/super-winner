@@ -1,0 +1,98 @@
+# LightSinger Default Configuration
+
+# Data Configuration
+data:
+  # Audio processing
+  sample_rate: 22050
+  mel_channels: 80
+  fft_size: 1024
+  hop_size: 256
+  win_size: 1024
+  fmin: 0
+  fmax: 8000
+  max_wav_length: 8192
+  
+  # Dataset paths
+  datasets_root: "./datasets/gin"
+  phoneme_cache_path: "./phoneme_cache"
+  
+  # Dataset splits
+  train_file: "train_filelist.txt"
+  val_file: "val_filelist.txt"
+  test_file: "test_filelist.txt"
+  
+  # Phoneme settings
+  phoneme_dict_file: "phoneme_dict.json"
+
+# Model Configuration
+model:
+  # Text Encoder
+  text_encoder:
+    n_layers: 4
+    n_heads: 4
+    hidden_dim: 256
+    dropout: 0.1
+    
+  # Predictors
+  predictors:
+    duration_predictor:
+      kernel_size: 3
+      dropout: 0.5
+      
+    f0_predictor:
+      kernel_size: 3
+      dropout: 0.5
+      
+  # Flow Decoder
+  flow_decoder:
+    n_flows: 4
+    hidden_dim: 256
+    kernel_size: 5
+    dilation_rate: 1
+    
+  # Vocoder (HiFi-GAN)
+  vocoder:
+    upsample_rates: [8, 8, 2, 2]
+    upsample_kernel_sizes: [16, 16, 4, 4]
+    resblock_kernel_sizes: [3, 7, 11]
+    resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
+    
+  # Discriminator
+  discriminator:
+    periods: [2, 3, 5, 7, 11]
+
+# Training Configuration
+training:
+  batch_size: 16
+  learning_rate: 0.0002
+  betas: [0.8, 0.99]
+  lr_decay: 0.999
+  seed: 1234
+  epochs: 1000
+  save_every: 5000
+  eval_every: 1000
+  precision: 16  # For mixed precision training
+  clip_grad_norm: 1.0
+  
+  # Optimizer
+  optimizer:
+    name: "AdamW"
+    weight_decay: 0.01
+    
+  # Scheduler
+  scheduler:
+    name: "ExponentialLR"
+    gamma: 0.999
+    
+  # Loss Weights
+  loss_weights:
+    mel: 45.0
+    duration: 1.0
+    f0: 1.0
+    gan: 1.0
+    fm: 2.0
+
+# Logging Configuration
+logging:
+  log_dir: "./logs"
+  audio_samples: 4  # Number of audio samples to log per validation

@@ -1,4 +1,5 @@
 futurevox/dataset_test_output/
 futurevox/datasets/
+futurevox/outputs/
 *.pyc
 *.ipynb

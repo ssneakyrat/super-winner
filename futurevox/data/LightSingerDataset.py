@@ -14,6 +14,7 @@ import pyworld as pw
 from typing import Dict, List, Tuple, Optional, Union
 import glob
 import logging
+import pytorch_lightning as pl
 
 from config.model_config import DataConfig
 
@@ -342,7 +343,11 @@ class LightSingerDataset(Dataset):
         logger.info(f"Saved phoneme dictionary with {len(self.phoneme_dict)} phonemes to {phoneme_dict_path}")
 
 
-class LightSingerDataModule:
+import pytorch_lightning as pl
+from torch.utils.data import DataLoader
+from typing import Optional
+
+class LightSingerDataModule(pl.LightningDataModule):
     """PyTorch Lightning DataModule for LightSinger."""
     
     def __init__(
@@ -363,6 +368,7 @@ class LightSingerDataModule:
             num_workers: Number of workers for data loading
             limit_dataset_size: Limit dataset to first N items (for debugging)
         """
+        super().__init__()
         self.data_dir = data_dir
         self.config = config
         self.batch_size = batch_size
@@ -373,9 +379,18 @@ class LightSingerDataModule:
         self.val_dataset = None
         self.test_dataset = None
     
-    def setup(self, stage: Optional[str] = None) -> None:
+    def prepare_data(self):
         """
-        Set up datasets.
+        Prepare data - this method is called only once on the main process.
+        Can be used for downloading, tokenization, etc.
+        """
+        # Nothing to do here for this dataset as we assume data is already prepared
+        pass
+    
+    def setup(self, stage: Optional[str] = None):
+        """
+        Set up datasets for each stage (fit, validate, test).
+        This method is called on every GPU separately.
         
         Args:
             stage: Current stage ("fit", "validate", "test")
@@ -406,7 +421,7 @@ class LightSingerDataModule:
                 limit_dataset_size=self.limit_dataset_size
             )
     
-    def train_dataloader(self) -> DataLoader:
+    def train_dataloader(self):
         """Return training data loader."""
         return DataLoader(
             self.train_dataset,
@@ -418,7 +433,7 @@ class LightSingerDataModule:
             collate_fn=self._collate_fn
         )
     
-    def val_dataloader(self) -> DataLoader:
+    def val_dataloader(self):
         """Return validation data loader."""
         return DataLoader(
             self.val_dataset,
@@ -430,7 +445,7 @@ class LightSingerDataModule:
             collate_fn=self._collate_fn
         )
     
-    def test_dataloader(self) -> DataLoader:
+    def test_dataloader(self):
         """Return test data loader."""
         return DataLoader(
             self.test_dataset,
@@ -442,16 +457,9 @@ class LightSingerDataModule:
             collate_fn=self._collate_fn
         )
     
-    def _collate_fn(self, batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
-        """
-        Collate function for batch creation.
-        
-        Args:
-            batch: List of items
-            
-        Returns:
-            Dict[str, torch.Tensor]: Batched items
-        """
+    def _collate_fn(self, batch):
+        """Collate function for batch creation."""
+        # Implementation remains the same as your existing code
         # Get max lengths
         max_phoneme_len = max(len(item["phonemes"]) for item in batch)
         max_mel_len = max(item["mel"].shape[1] for item in batch)

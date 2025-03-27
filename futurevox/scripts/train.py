@@ -1,11 +1,11 @@
 """
-Training script for FutureVox.
+Modified training script for FutureVox with fixed DataModule usage.
 """
 
 import os
 import sys
 import argparse
-import json  # Add import for json module
+import json
 import torch
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
@@ -137,17 +137,34 @@ def main():
         limit_dataset_size=args.limit_dataset
     )
     
-    data_module.setup()  # Force setup to load the phoneme dictionary
+    # Explicitly call setup to load phoneme dictionary
+    data_module.setup("fit")
+    
+    # Load phoneme dictionary to get vocabulary size
     phoneme_dict_path = os.path.join(data_dir, config.data.phoneme_dict_file)
-    with open(phoneme_dict_path, "r") as f:
-        phoneme_dict = json.load(f)
-    n_vocab = len(phoneme_dict) + 1  # +1 for padding/unknown token
-
-    # Then create the model with the correct vocabulary size
-    model = FutureVoxLightning(
-        config=config,
-        n_vocab=n_vocab
-    )
+    if os.path.exists(phoneme_dict_path):
+        with open(phoneme_dict_path, "r") as f:
+            phoneme_dict = json.load(f)
+        n_vocab = len(phoneme_dict) + 1  # +1 for padding/unknown token
+    else:
+        print(f"Warning: Phoneme dictionary not found at {phoneme_dict_path}. Using default vocabulary size.")
+        n_vocab = 100  # Default fallback value
+    
+    # Create model
+    if args.checkpoint:
+        # Resume from checkpoint
+        print(f"Resuming from checkpoint: {args.checkpoint}")
+        model = FutureVoxLightning.load_from_checkpoint(
+            checkpoint_path=args.checkpoint,
+            config=config,
+            n_vocab=n_vocab
+        )
+    else:
+        # Create new model
+        model = FutureVoxLightning(
+            config=config,
+            n_vocab=n_vocab
+        )
     
     # Create callbacks
     callbacks = [
@@ -169,7 +186,7 @@ def main():
         name="futurevox"
     )
     
-    # Create trainer
+    # Create trainer with explicit strategy
     trainer = pl.Trainer(
         max_epochs=config.training.epochs,
         callbacks=callbacks,
@@ -178,7 +195,8 @@ def main():
         gradient_clip_val=config.training.clip_grad_norm,
         log_every_n_steps=100,
         val_check_interval=0.25,  # Validate every 25% of training epoch
-        default_root_dir=args.output_dir
+        default_root_dir=args.output_dir,
+        accelerator="cpu"  # Use 'gpu' if CUDA is available
     )
     
     # Train model
