@@ -197,7 +197,7 @@ def main():
         log_every_n_steps=100,
         val_check_interval=0.25,  # Validate every 25% of training epoch
         default_root_dir=args.output_dir,
-        accelerator="cpu"  # Use 'gpu' if CUDA is available
+        accelerator="gpu"  # Use 'gpu' if CUDA is available
     )
     
     # Train model
