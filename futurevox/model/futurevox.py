@@ -936,8 +936,19 @@ class FutureVox(nn.Module):
         
         # Generate waveform with vocoder
         if mel_pred is not None:
-            # Transport mel_pred for vocoder
-            mel_pred_for_vocoder = mel_pred.transpose(1, 2)  # [B, M, T]
+            # Ensure mel_pred_for_vocoder has shape [B, 80, T]
+            if mel_pred.size(1) == config.data.mel_channels:
+                # already [B, 80, T]
+                mel_pred_for_vocoder = mel_pred
+            elif mel_pred.size(2) == config.data.mel_channels:
+                # [B, T, 80] -> [B, 80, T]
+                mel_pred_for_vocoder = mel_pred.transpose(1, 2)
+            else:
+                # Need to reshape to ensure 80 is in the middle dimension
+                B = mel_pred.size(0)
+                rest = mel_pred.numel() // (B * config.data.mel_channels)
+                mel_pred_for_vocoder = mel_pred.reshape(B, config.data.mel_channels, rest)
+            
             waveform = self.vocoder(mel_pred_for_vocoder)
         else:
             waveform = None
