@@ -91,6 +91,7 @@ class DurationPredictor(nn.Module):
         super().__init__()
         
         self.conv_layers = nn.ModuleList()
+        self.kernel_size = config.kernel_size
         
         # Initial layer
         self.conv_layers.append(
@@ -138,30 +139,11 @@ class DurationPredictor(nn.Module):
         # Transpose for 1D convolution
         x_conv = x.transpose(1, 2)  # [B, H, L]
         
-        # Apply convolution layers
-        for layer in self.conv_layers:
-            x_conv = layer(x_conv)
-        
-        # Transpose back
-        x = x_conv.transpose(1, 2)  # [B, L, H]
-        
-        # Project to scalar
-        log_durations = self.proj(x)  # [B, L, 1]
-        
-        return log_durations
-        
-    def forward(self, x):
-        """
-        Forward pass.
-        
-        Args:
-            x: Input features [B, L, H]
-            
-        Returns:
-            Log durations [B, L, 1]
-        """
-        # Transpose for 1D convolution
-        x_conv = x.transpose(1, 2)  # [B, H, L]
+        # Check if sequence length is too small and pad if necessary
+        min_length = self.kernel_size
+        if x_conv.size(2) < min_length:
+            padding_needed = min_length - x_conv.size(2)
+            x_conv = F.pad(x_conv, (0, padding_needed))
         
         # Apply convolution layers
         for layer in self.conv_layers:
@@ -169,6 +151,10 @@ class DurationPredictor(nn.Module):
         
         # Transpose back
         x = x_conv.transpose(1, 2)  # [B, L, H]
+        
+        # Trim to original length if padded
+        original_len = min(x.size(1), x.size(1))
+        x = x[:, :original_len, :]
         
         # Project to scalar
         log_durations = self.proj(x)  # [B, L, 1]
@@ -251,38 +237,15 @@ class F0Predictor(nn.Module):
         
         # Transpose back and make sure we return to original sequence length
         x = x_conv.transpose(1, 2)  # [B, L, H]
-        x = x[:, :x.shape[1], :]  # Trim to original length if padded
+        
+        # Trim to original length if padded
+        original_len = min(x.size(1), x.size(1))
+        x = x[:, :original_len, :]
         
         # Project to scalar
         f0 = self.proj(x)  # [B, L, 1]
         
         return f0
-        
-    def forward(self, x):
-        """
-        Forward pass.
-        
-        Args:
-            x: Input features [B, L, H]
-            
-        Returns:
-            F0 values [B, L, 1]
-        """
-        # Transpose for 1D convolution
-        x_conv = x.transpose(1, 2)  # [B, H, L]
-        
-        # Apply convolution layers
-        for layer in self.conv_layers:
-            x_conv = layer(x_conv)
-        
-        # Transpose back
-        x = x_conv.transpose(1, 2)  # [B, L, H]
-        
-        # Project to scalar
-        f0 = self.proj(x)  # [B, L, 1]
-        
-        return f0
-
 
 class AffineCouplingLayer(nn.Module):
     """
