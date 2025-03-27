@@ -627,15 +627,12 @@ class HiFiGAN(nn.Module):
         Forward pass.
         
         Args:
-            x: Input mel-spectrogram [B, L, M]
+            x: Input mel-spectrogram [B, M, L]
             
         Returns:
             Waveform [B, 1, T]
         """
-        # Transpose for 1D convolution
-        x = x.transpose(1, 2)  # [B, M, L]
-        
-        # Initial convolution
+        # Initial convolution - no transpose needed as input is already [B, M, L]
         x = self.conv_pre(x)
         
         # Upsampling
