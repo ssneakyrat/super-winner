@@ -112,11 +112,11 @@ class FutureVoxLightning(pl.LightningModule):
             0.1 * losses["kl_loss"]  # Small weight for KL loss
         )
         
-        # Log losses
+        # Log losses - ensure KL loss is a scalar by taking the mean
         self.log("train/duration_loss", losses["duration_loss"], prog_bar=True)
         self.log("train/f0_loss", losses["f0_loss"], prog_bar=True)
         self.log("train/mel_loss", losses["mel_loss"], prog_bar=True)
-        self.log("train/kl_loss", losses["kl_loss"])
+        self.log("train/kl_loss", losses["kl_loss"].mean(), prog_bar=False)  # Apply mean to reduce to scalar
         self.log("train/total_loss", total_loss, prog_bar=True)
         
         return total_loss
@@ -163,14 +163,14 @@ class FutureVoxLightning(pl.LightningModule):
             self.config.training.loss_weights.duration * gt_losses["duration_loss"] +
             self.config.training.loss_weights.f0 * gt_losses["f0_loss"] +
             self.config.training.loss_weights.mel * gt_losses["mel_loss"] +
-            0.1 * gt_losses["kl_loss"]  # Small weight for KL loss
+            0.1 * gt_losses["kl_loss"].mean()  # Small weight for KL loss - apply mean to reduce to scalar
         )
         
-        # Log losses
+        # Log losses - ensure KL loss is a scalar by taking the mean
         self.log("val/duration_loss", gt_losses["duration_loss"])
         self.log("val/f0_loss", gt_losses["f0_loss"])
         self.log("val/mel_loss", gt_losses["mel_loss"])
-        self.log("val/kl_loss", gt_losses["kl_loss"])
+        self.log("val/kl_loss", gt_losses["kl_loss"].mean())  # Apply mean to reduce to scalar
         self.log("val/total_loss", total_loss)
         
         # Log spectrograms and audio for first few samples
