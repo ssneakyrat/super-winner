@@ -63,6 +63,7 @@ class ModelConfig:
 
 @dataclass
 class DataConfig:
+    # Audio processing
     sample_rate: int = 22050
     mel_channels: int = 80
     fft_size: int = 1024
@@ -71,7 +72,18 @@ class DataConfig:
     fmin: int = 0
     fmax: int = 8000
     max_wav_length: int = 8192
+    
+    # Dataset paths
+    datasets_root: str = "./datasets"
     phoneme_cache_path: str = "./phoneme_cache"
+    
+    # Dataset splits
+    train_file: str = "train_filelist.txt"
+    val_file: str = "val_filelist.txt"
+    test_file: str = "test_filelist.txt"
+    
+    # Phoneme settings
+    phoneme_dict_file: str = "phoneme_dict.json"
 
 
 @dataclass

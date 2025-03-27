@@ -1,7 +1,8 @@
-# FutureVox Default Configuration
+# LightSinger Default Configuration
 
 # Data Configuration
 data:
+  # Audio processing
   sample_rate: 22050
   mel_channels: 80
   fft_size: 1024
@@ -10,7 +11,18 @@ data:
   fmin: 0
   fmax: 8000
   max_wav_length: 8192
+  
+  # Dataset paths
+  datasets_root: "./datasets/gin"
   phoneme_cache_path: "./phoneme_cache"
+  
+  # Dataset splits
+  train_file: "train_filelist.txt"
+  val_file: "val_filelist.txt"
+  test_file: "test_filelist.txt"
+  
+  # Phoneme settings
+  phoneme_dict_file: "phoneme_dict.json"
 
 # Model Configuration
 model:
