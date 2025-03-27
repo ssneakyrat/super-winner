@@ -10,7 +10,24 @@ from typing import Dict, List, Tuple, Optional, Union
 
 from config.model_config import FutureVoxConfig, ModelConfig
 
-
+def safe_inverse(weight, eps=1e-6):
+    """
+    Compute inverse of weight matrix, adding a small regularization to avoid singularity.
+    
+    Args:
+        weight: Weight matrix [out_channels, in_channels]
+        eps: Small regularization value
+        
+    Returns:
+        Inverse weight matrix
+    """
+    # Add small diagonal regularization
+    weight = weight.clone()
+    diag_reg = torch.eye(weight.size(0), device=weight.device) * eps
+    weight = weight + diag_reg
+    
+    return torch.inverse(weight)
+            
 class TextEncoder(nn.Module):
     """Transformer-based text encoder for phoneme sequences."""
     
@@ -508,9 +525,9 @@ class FlowDecoder(nn.Module):
                 if isinstance(flow, AffineCouplingLayer):
                     z = flow(z, reverse=True)
                 else:
-                    # Inverse 1x1 convolution - FIX: Properly handle dimensions for inverse
+                    # Inverse 1x1 convolution - FIX: Use safe_inverse function
                     weight_2d = flow.weight.squeeze(2)  # Remove kernel dimension to get 2D tensor
-                    weight_inv_2d = torch.inverse(weight_2d)  # Compute inverse of 2D tensor
+                    weight_inv_2d = safe_inverse(weight_2d, eps=1e-6)  # Compute inverse with regularization
                     weight_inv_3d = weight_inv_2d.unsqueeze(2)  # Add kernel dimension back to get 3D tensor
                     z = F.conv1d(z - flow.bias.unsqueeze(1), weight_inv_3d)
             
