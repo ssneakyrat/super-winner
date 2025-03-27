@@ -228,7 +228,7 @@ def main():
     # Check duration sum matches mel length
     duration_sum = item["durations"].sum().item()
     mel_length = item["mel"].shape[1]
-    duration_match = abs(duration_sum - mel_length) <= 10  # Allow small margin of error
+    duration_match = abs(duration_sum - mel_length) <= 10  # Allow margin of error
     
     print(f"Duration sum: {duration_sum}, Mel length: {mel_length}")
     print(f"Duration matches mel length: {'YES' if duration_match else 'NO (possible alignment issue)'}")

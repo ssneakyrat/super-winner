@@ -151,16 +151,33 @@ class LightSingerDataset(Dataset):
         hop_size = self.config.hop_size
         sample_rate = self.config.sample_rate
         
-        # Convert sample-level timings to frame-level durations
+        # UPDATED: Check if values are in HTK format (100ns units)
+        # Compare the last end_time with reasonable audio length 
+        max_time = end_times[-1]
+        expected_max_samples = 30 * sample_rate  # Expect max 30 seconds
+        
+        # If times appear to be in HTK format (100ns units)
+        time_scale = 1
+        if max_time > expected_max_samples * 10:  # If unreasonably large
+            time_scale = sample_rate / 10000000  # Convert from HTK 100ns units to samples
+        
+        # Convert from time to frame-level durations with appropriate scaling
         durations = []
         for start, end in zip(start_times, end_times):
+            # Apply scaling if needed
+            start_sample = int(start * time_scale)
+            end_sample = int(end * time_scale)
+            
             # Convert from sample indices to frame indices
-            start_frame = start // hop_size
-            end_frame = end // hop_size
+            start_frame = start_sample // hop_size
+            end_frame = end_sample // hop_size
             duration = end_frame - start_frame
             durations.append(duration)
         
         durations = np.array(durations)
+        
+        # Add proportional scaling to match mel length
+        # This can be added if needed
         
         # Update phoneme dictionary if needed
         for phoneme in phonemes:
