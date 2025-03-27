@@ -330,8 +330,17 @@ class AffineCouplingLayer(nn.Module):
                 if i < len(self.convs) - 1:
                     h = res_skip[:, :self.hidden_dim]
                 
+                # FIX: Ensure log_s and b have the same number of channels as xb
                 log_s = skip[:, :self.half_channels]
-                b = skip[:, self.half_channels:]
+                b = skip[:, self.half_channels:2*self.half_channels]  # Only take half_channels for b too
+                
+                # Ensure dimensions match before operating
+                if log_s.size(1) != xb.size(1) or b.size(1) != xb.size(1):
+                    # Debug info - can be removed after fix is confirmed
+                    print(f"Dimension mismatch: log_s={log_s.size()}, b={b.size()}, xb={xb.size()}")
+                    # Explicitly reshape to match dimensions if needed
+                    log_s = log_s[:, :xb.size(1)]
+                    b = b[:, :xb.size(1)]
                 
                 xb = torch.exp(log_s) * xb + b
                 log_s_total = log_s_total + log_s
@@ -359,8 +368,14 @@ class AffineCouplingLayer(nn.Module):
                 if i < len(self.convs) - 1:
                     h = res_skip[:, :self.hidden_dim]
                 
+                # FIX: Ensure log_s and b have the same number of channels as xb
                 log_s = skip[:, :self.half_channels]
-                b = skip[:, self.half_channels:]
+                b = skip[:, self.half_channels:2*self.half_channels]  # Only take half_channels for b too
+                
+                # Ensure dimensions match before operating
+                if log_s.size(1) != xb.size(1) or b.size(1) != xb.size(1):
+                    log_s = log_s[:, :xb.size(1)]
+                    b = b[:, :xb.size(1)]
                 
                 xb = (xb - b) / torch.exp(log_s)
             
@@ -368,7 +383,6 @@ class AffineCouplingLayer(nn.Module):
             x = torch.cat([xa, xb], 1)
             
             return x
-
 
 class FlowDecoder(nn.Module):
     """
