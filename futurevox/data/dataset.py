@@ -267,6 +267,7 @@ class SVSDataModule:
                 split="train",
                 limit_dataset_size=self.limit_dataset_size
             )
+            
             self.val_dataset = SVSBaseDataset(
                 self.data_dir,
                 self.config,

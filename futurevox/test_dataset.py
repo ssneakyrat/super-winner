@@ -15,9 +15,6 @@ import librosa
 import librosa.display
 from typing import Dict, List, Any, Optional
 
-# Add parent directory to path to import config and dataset
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from config.model_config import FutureVoxConfig, DataConfig
 # Fix import to use the correct module for LightSingerDataset
 from data.LightSingerDataset import LightSingerDataset

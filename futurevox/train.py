@@ -11,9 +11,6 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from pytorch_lightning.loggers import TensorBoardLogger
 
-# Add parent directory to path to import config and dataset
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from config.model_config import FutureVoxConfig
 from data.LightSingerDataset import LightSingerDataModule
 from training.lightning_model import FutureVoxLightning
@@ -127,7 +124,8 @@ def main():
     else:
         data_dir = config.data.datasets_root
         print(f"Using datasets_root from config: {data_dir}")
-    
+        
+    print(f"datasets_root: {data_dir}")
     # Create data module
     data_module = LightSingerDataModule(
         data_dir=data_dir,
@@ -137,9 +135,12 @@ def main():
         limit_dataset_size=args.limit_dataset
     )
     
+    print( f"fit:" )
+
     # Explicitly call setup to load phoneme dictionary
     data_module.setup("fit")
     
+    print( f"AFTER FIT -----" )
     # Load phoneme dictionary to get vocabulary size
     phoneme_dict_path = os.path.join(data_dir, config.data.phoneme_dict_file)
     if os.path.exists(phoneme_dict_path):

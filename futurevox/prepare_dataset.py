@@ -14,10 +14,6 @@ import librosa
 from tqdm import tqdm
 from typing import Dict, List, Tuple, Set
 
-# Fix imports for running from futurevox/ directory
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config.model_config import FutureVoxConfig
 
 
@@ -355,7 +351,7 @@ def main():
     output_dir = config.data.datasets_root
     
     # By convention, use a "raw" subdirectory in the same parent directory as datasets_root
-    parent_dir = os.path.dirname(os.path.abspath(output_dir))
+    parent_dir = output_dir
     input_dir = parent_dir #os.path.join(parent_dir, "raw")
     
     # Ensure input directory exists

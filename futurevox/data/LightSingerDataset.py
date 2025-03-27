@@ -396,6 +396,7 @@ class LightSingerDataModule(pl.LightningDataModule):
             stage: Current stage ("fit", "validate", "test")
         """
         # Create datasets for training, validation, and testing
+        
         if stage == "fit" or stage is None:
             self.train_dataset = LightSingerDataset(
                 self.data_dir,
@@ -409,9 +410,6 @@ class LightSingerDataModule(pl.LightningDataModule):
                 split="val",
                 limit_dataset_size=self.limit_dataset_size
             )
-            
-            # Save phoneme dictionary after processing training dataset
-            self.train_dataset.save_phoneme_dict()
         
         if stage == "test" or stage is None:
             self.test_dataset = LightSingerDataset(
