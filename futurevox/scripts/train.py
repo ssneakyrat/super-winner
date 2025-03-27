@@ -3,11 +3,16 @@ Training script for FutureVox.
 """
 
 import os
+import sys
 import argparse
+import json  # Add import for json module
 import torch
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from pytorch_lightning.loggers import TensorBoardLogger
+
+# Add parent directory to path to import config and dataset
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config.model_config import FutureVoxConfig
 from data.LightSingerDataset import LightSingerDataModule
@@ -25,8 +30,8 @@ def parse_args():
     )
     
     parser.add_argument(
-        "--data_dir", type=str, required=True,
-        help="Path to data directory"
+        "--data_dir", type=str, default=None,
+        help="Path to data directory (default: use datasets_root from config)"
     )
     
     parser.add_argument(
@@ -116,9 +121,16 @@ def main():
     # Set random seed
     pl.seed_everything(config.training.seed)
     
+    # Determine data directory - either from args or from config
+    if args.data_dir:
+        data_dir = args.data_dir
+    else:
+        data_dir = config.data.datasets_root
+        print(f"Using datasets_root from config: {data_dir}")
+    
     # Create data module
     data_module = LightSingerDataModule(
-        data_dir=args.data_dir,
+        data_dir=data_dir,
         config=config.data,
         batch_size=config.training.batch_size,
         num_workers=args.num_workers,
@@ -126,7 +138,7 @@ def main():
     )
     
     data_module.setup()  # Force setup to load the phoneme dictionary
-    phoneme_dict_path = os.path.join(args.data_dir, config.data.phoneme_dict_file)
+    phoneme_dict_path = os.path.join(data_dir, config.data.phoneme_dict_file)
     with open(phoneme_dict_path, "r") as f:
         phoneme_dict = json.load(f)
     n_vocab = len(phoneme_dict) + 1  # +1 for padding/unknown token
