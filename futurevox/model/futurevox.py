@@ -465,10 +465,9 @@ class FlowDecoder(nn.Module):
                     z, logdet = flow(z, reverse=False)
                     logdet_sum = logdet_sum + logdet
                 else:
-                    # 1x1 convolution
-                    weight = flow.weight.unsqueeze(2)  # [output_dim, output_dim, 1]
-                    z = F.conv1d(z, weight, bias=flow.bias)
-                    logdet = torch.logdet(flow.weight) * z.shape[2]
+                    # 1x1 convolution - FIX: Use the weight directly without unsqueeze
+                    z = F.conv1d(z, flow.weight, bias=flow.bias)
+                    logdet = torch.logdet(flow.weight.squeeze(2)) * z.shape[2]
                     logdet_sum = logdet_sum + logdet
             
             # Calculate KL divergence
@@ -509,15 +508,16 @@ class FlowDecoder(nn.Module):
                 if isinstance(flow, AffineCouplingLayer):
                     z = flow(z, reverse=True)
                 else:
-                    # Inverse 1x1 convolution
-                    weight_inv = torch.inverse(flow.weight).unsqueeze(2)  # [output_dim, output_dim, 1]
-                    z = F.conv1d(z - flow.bias.unsqueeze(1), weight_inv)
+                    # Inverse 1x1 convolution - FIX: Properly handle dimensions for inverse
+                    weight_2d = flow.weight.squeeze(2)  # Remove kernel dimension to get 2D tensor
+                    weight_inv_2d = torch.inverse(weight_2d)  # Compute inverse of 2D tensor
+                    weight_inv_3d = weight_inv_2d.unsqueeze(2)  # Add kernel dimension back to get 3D tensor
+                    z = F.conv1d(z - flow.bias.unsqueeze(1), weight_inv_3d)
             
             # Transpose back
             z = z.transpose(1, 2)  # [B, L, output_dim]
             
             return z
-
 
 class ResBlock(nn.Module):
     """
