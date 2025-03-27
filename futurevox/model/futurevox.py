@@ -708,7 +708,7 @@ class FutureVox(nn.Module):
         
         # Calculate output length
         output_lengths = torch.sum(durations, dim=1)
-        max_output_len = output_lengths.max().item()
+        max_output_len = max(output_lengths.max().item(), 1)  # Ensure at least length 1 to avoid empty tensors
         
         # Initialize output tensor
         expanded = torch.zeros(
@@ -722,10 +722,19 @@ class FutureVox(nn.Module):
             for i in range(seq_len):
                 current_duration = durations[b, i].item()
                 if current_duration > 0:
-                    expanded[b, current_pos:current_pos + current_duration] = x[b, i].unsqueeze(0).expand(
-                        current_duration, -1
-                    )
-                    current_pos += current_duration
+                    if current_pos + current_duration <= max_output_len:  # Add boundary check
+                        expanded[b, current_pos:current_pos + current_duration] = x[b, i].unsqueeze(0).expand(
+                            current_duration, -1
+                        )
+                        current_pos += current_duration
+                    else:
+                        # Truncate if needed
+                        remaining = max_output_len - current_pos
+                        if remaining > 0:
+                            expanded[b, current_pos:max_output_len] = x[b, i].unsqueeze(0).expand(
+                                remaining, -1
+                            )
+                        break
         
         return expanded, output_lengths
     
@@ -740,7 +749,7 @@ class FutureVox(nn.Module):
         temperature=1.0
     ):
         """
-        Forward pass.
+        Forward pass with dimension fixes.
         
         Args:
             phonemes: Phoneme token IDs [B, L]
@@ -773,9 +782,23 @@ class FutureVox(nn.Module):
         if durations is not None:
             # Training mode
             durations_for_expansion = durations
-            log_durations_gt = torch.log(durations.float() + 1)
-            duration_loss = F.mse_loss(log_durations_pred, log_durations_gt, reduction='none')
-            duration_loss = (duration_loss * phoneme_mask.squeeze(1)).sum() / phoneme_mask.sum()
+            # Ensure same shape for loss calculation
+            log_durations_gt = torch.log(durations.float().clamp(min=1))  # [B, L]
+            
+            # Ensure shapes match before computing loss
+            if log_durations_pred.shape == log_durations_gt.shape:
+                duration_loss = F.mse_loss(log_durations_pred, log_durations_gt, reduction='none')
+                duration_loss = (duration_loss * phoneme_mask.squeeze(1)).sum() / phoneme_mask.sum().clamp(min=1e-5)
+            else:
+                # Handle shape mismatch - trim to match sizes
+                min_len = min(log_durations_pred.size(1), log_durations_gt.size(1))
+                duration_loss = F.mse_loss(
+                    log_durations_pred[:, :min_len], 
+                    log_durations_gt[:, :min_len], 
+                    reduction='none'
+                )
+                mask_trimmed = phoneme_mask.squeeze(1)[:, :min_len]
+                duration_loss = (duration_loss * mask_trimmed).sum() / mask_trimmed.sum().clamp(min=1e-5)
         else:
             # Inference mode
             durations_for_expansion = torch.exp(log_durations_pred) - 1
@@ -783,29 +806,60 @@ class FutureVox(nn.Module):
             durations_for_expansion = torch.round(durations_for_expansion).long()
             duration_loss = None
         
-        # Length regulation
+        # Length regulation with safety checks
         expanded, output_lengths = self.length_regulate(encoded, durations_for_expansion)  # [B, T, H]
         
-        # Create expanded mask
-        expanded_mask = torch.unsqueeze(
-            torch.arange(0, expanded.size(1), device=expanded.device)[None, :] < output_lengths[:, None],
-            1
-        ).float()  # [B, 1, T]
-        
-        # F0 prediction
-        f0_pred = self.f0_predictor(expanded).squeeze(-1)  # [B, T]
-        
-        # Apply mask to predicted F0
-        f0_pred = f0_pred * expanded_mask.squeeze(1)
+        # Create expanded mask - ensure dimensions are valid
+        if expanded.size(1) > 0:  # Only create mask if we have a valid sequence length
+            expanded_mask = torch.unsqueeze(
+                torch.arange(0, expanded.size(1), device=expanded.device)[None, :] < output_lengths[:, None],
+                1
+            ).float()  # [B, 1, T]
+            
+            # F0 prediction
+            f0_pred = self.f0_predictor(expanded).squeeze(-1)  # [B, T]
+            
+            # Safety check for dimensions before masking
+            if f0_pred.size(1) == expanded_mask.size(2):
+                # Apply mask to predicted F0
+                f0_pred = f0_pred * expanded_mask.squeeze(1)
+            else:
+                # Handle dimension mismatch
+                min_len = min(f0_pred.size(1), expanded_mask.size(2))
+                f0_pred_safe = torch.zeros_like(f0_pred)
+                f0_pred_safe[:, :min_len] = f0_pred[:, :min_len] * expanded_mask.squeeze(1)[:, :min_len]
+                f0_pred = f0_pred_safe
+        else:
+            # Handle empty sequence case
+            batch_size = expanded.size(0)
+            expanded = torch.zeros(batch_size, 1, expanded.size(2), device=expanded.device)
+            expanded_mask = torch.ones(batch_size, 1, 1, device=expanded.device)
+            f0_pred = torch.zeros(batch_size, 1, device=expanded.device)
+            output_lengths = torch.ones(batch_size, device=expanded.device)
         
         # F0 loss if ground truth is provided
         if f0 is not None:
             # Calculate F0 loss only on voiced frames
             voiced_mask = (f0 > 0).float() * expanded_mask.squeeze(1)
-            if voiced_mask.sum() > 0:
-                f0_loss = F.mse_loss(f0_pred * voiced_mask, f0 * voiced_mask, reduction='sum') / (voiced_mask.sum() + 1e-6)
+            
+            # Handle dimension mismatch
+            if f0_pred.size(1) != f0.size(1):
+                min_len = min(f0_pred.size(1), f0.size(1))
+                voiced_mask_trimmed = voiced_mask[:, :min_len]
+                
+                if voiced_mask_trimmed.sum() > 0:
+                    f0_loss = F.mse_loss(
+                        f0_pred[:, :min_len] * voiced_mask_trimmed, 
+                        f0[:, :min_len] * voiced_mask_trimmed, 
+                        reduction='sum'
+                    ) / (voiced_mask_trimmed.sum() + 1e-6)
+                else:
+                    f0_loss = torch.tensor(0.0, device=f0.device)
             else:
-                f0_loss = torch.tensor(0.0, device=f0.device)
+                if voiced_mask.sum() > 0:
+                    f0_loss = F.mse_loss(f0_pred * voiced_mask, f0 * voiced_mask, reduction='sum') / (voiced_mask.sum() + 1e-6)
+                else:
+                    f0_loss = torch.tensor(0.0, device=f0.device)
         else:
             f0_loss = None
         
@@ -823,7 +877,15 @@ class FutureVox(nn.Module):
             kl_loss = None
         
         # Apply expanded mask to predicted mel
-        mel_pred = mel_pred * expanded_mask.transpose(1, 2)
+        if mel_pred.size(1) == expanded_mask.size(2):
+            mel_pred = mel_pred * expanded_mask.transpose(1, 2)
+        else:
+            # Handle dimension mismatch
+            min_len = min(mel_pred.size(1), expanded_mask.size(2))
+            safe_mask = expanded_mask[:, :, :min_len]
+            mel_pred_safe = torch.zeros_like(mel_pred)
+            mel_pred_safe[:, :min_len] = mel_pred[:, :min_len] * safe_mask.transpose(1, 2)
+            mel_pred = mel_pred_safe
         
         # Calculate mel loss if ground truth is provided
         if mel is not None and mel_lengths is not None:
@@ -836,8 +898,25 @@ class FutureVox(nn.Module):
             # Transport mel to match the model's output format
             mel = mel.transpose(1, 2)  # [B, T, M]
             
-            # Calculate masked L1 loss
-            mel_loss = F.l1_loss(mel_pred * mel_mask.transpose(1, 2), mel * mel_mask.transpose(1, 2), reduction='sum') / (mel_mask.sum() + 1e-6)
+            # Handle dimension mismatch for mel loss calculation
+            if mel_pred.size(1) != mel.size(1):
+                min_len = min(mel_pred.size(1), mel.size(1))
+                mel_pred_trimmed = mel_pred[:, :min_len]
+                mel_trimmed = mel[:, :min_len]
+                mask_trimmed = mel_mask.transpose(1, 2)[:, :min_len]
+                
+                mel_loss = F.l1_loss(
+                    mel_pred_trimmed * mask_trimmed, 
+                    mel_trimmed * mask_trimmed, 
+                    reduction='sum'
+                ) / (mask_trimmed.sum() + 1e-6)
+            else:
+                # Calculate masked L1 loss
+                mel_loss = F.l1_loss(
+                    mel_pred * mel_mask.transpose(1, 2), 
+                    mel * mel_mask.transpose(1, 2), 
+                    reduction='sum'
+                ) / (mel_mask.sum() + 1e-6)
         else:
             mel_loss = None
         
