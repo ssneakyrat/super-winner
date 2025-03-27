@@ -190,7 +190,8 @@ class F0Predictor(nn.Module):
                     padding=(config.kernel_size - 1) // 2
                 ),
                 nn.ReLU(),
-                nn.LayerNorm(input_dim),
+                # Use GroupNorm instead of LayerNorm for Conv1D outputs
+                nn.GroupNorm(1, input_dim),  # 1 group = InstanceNorm behavior
                 nn.Dropout(config.dropout)
             )
         )
@@ -204,7 +205,8 @@ class F0Predictor(nn.Module):
                     padding=(config.kernel_size - 1) // 2
                 ),
                 nn.ReLU(),
-                nn.LayerNorm(input_dim),
+                # Use GroupNorm instead of LayerNorm for Conv1D outputs
+                nn.GroupNorm(1, input_dim),  # 1 group = InstanceNorm behavior
                 nn.Dropout(config.dropout)
             )
         )
