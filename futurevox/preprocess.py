@@ -92,8 +92,8 @@ def main():
             f0, voiced_flag, _ = extract_f0(
                 wav_path,
                 hop_length=config['audio']['hop_length'],
-                fmin=50,  # Typical range for singing voice
-                fmax=1000
+                fmin=config['audio']['fmin'],  # Typical range for singing voice
+                fmax=config['audio']['fmax']
             )
             
             # Check alignment of mel spectrogram and F0

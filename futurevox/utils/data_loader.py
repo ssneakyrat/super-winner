@@ -119,7 +119,7 @@ def list_samples_in_h5(h5_file_path):
     
     return pd.DataFrame(samples)
 
-def extract_aligned_features(h5_file_path, sample_index, feature_type='mel_frame_to_phoneme'):
+def extract_aligned_features(h5_file_path, sample_index, hop_length, feature_type='mel_frame_to_phoneme'):
     """
     Extract aligned features from the HDF5 file.
     
@@ -143,7 +143,7 @@ def extract_aligned_features(h5_file_path, sample_index, feature_type='mel_frame
     
     if feature_type == 'mel_frame_to_phoneme':
         # Get hop length from config or use default
-        hop_length = 256  # Default, should match your extraction settings
+        hop_length = hop_length  # Default, should match your extraction settings
         
         # Calculate time for each mel frame
         n_frames = mel_spec.shape[1]
@@ -165,7 +165,7 @@ def extract_aligned_features(h5_file_path, sample_index, feature_type='mel_frame
     else:
         raise ValueError(f"Unknown feature type: {feature_type}")
 
-def visualize_sample_from_h5(h5_file_path, sample_index, include_f0=True):
+def visualize_sample_from_h5(h5_file_path, sample_index, hop_length, include_f0=True):
     """
     Visualize a sample from the HDF5 file, showing mel spectrogram, phoneme boundaries, and optionally F0.
     
@@ -193,7 +193,7 @@ def visualize_sample_from_h5(h5_file_path, sample_index, include_f0=True):
     img = librosa.display.specshow(
         mel_spec, 
         sr=sr, 
-        hop_length=256,  # Should match your extraction settings
+        hop_length=hop_length,  # Should match your extraction settings
         x_axis='time', 
         y_axis='mel',
         ax=ax1
