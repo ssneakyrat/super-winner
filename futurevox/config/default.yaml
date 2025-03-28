@@ -68,9 +68,9 @@ training:
   betas: [0.8, 0.99]
   lr_decay: 0.999
   seed: 1234
-  epochs: 1  # Reduced from 1000
-  save_every: 100  # More frequent saving
-  eval_every: 100  # More frequent evaluation
+  epochs: 10  # Reduced from 1000
+  save_every: 1000  # More frequent saving
+  eval_every: 1000  # More frequent evaluation
   precision: 16  # Mixed precision training
   clip_grad_norm: 1.0
   
