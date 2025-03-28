@@ -82,7 +82,7 @@ class FutureVoxLightning(pl.LightningModule):
     
     def training_step(self, batch, batch_idx):
         """
-        Training step with added duration validation.
+        Improved training step with gradient monitoring.
         
         Args:
             batch: Input batch
@@ -104,6 +104,26 @@ class FutureVoxLightning(pl.LightningModule):
             print(f"Warning: Batch {batch_idx} has all zero durations. Setting to default values.")
             # Set to default value of 1 frame per phoneme
             durations = torch.ones_like(durations)
+        
+        # Check for NaN values in inputs
+        has_nans = False
+        for name, tensor in {
+            "phonemes": phonemes, 
+            "durations": durations,
+            "f0": f0, 
+            "mel": mel
+        }.items():
+            if torch.isnan(tensor).any():
+                has_nans = True
+                print(f"WARNING: NaN values detected in {name} input")
+        
+        if has_nans:
+            print(f"WARNING: NaN values in batch {batch_idx}, using fallback loss")
+            dummy_loss = torch.tensor(1.0, device=self.device, requires_grad=True)
+            self.log("train/nan_inputs", 1.0, prog_bar=True, batch_size=phonemes.size(0))
+            return dummy_loss
+        else:
+            self.log("train/nan_inputs", 0.0, prog_bar=False, batch_size=phonemes.size(0))
             
         # Forward pass
         outputs, losses = self.model(
@@ -116,31 +136,98 @@ class FutureVoxLightning(pl.LightningModule):
             temperature=1.0
         )
         
-        # Calculate total loss
+        # Safety check for NaN losses before combining
+        nan_detected = False
+        for loss_name, loss_value in losses.items():
+            if torch.isnan(loss_value).any() or torch.isinf(loss_value).any():
+                print(f"WARNING: NaN/Inf detected in {loss_name}")
+                nan_detected = True
+        
+        if nan_detected:
+            print(f"WARNING: NaN losses in batch {batch_idx}, using fallback loss")
+            dummy_loss = torch.tensor(1.0, device=self.device, requires_grad=True)
+            self.log("train/nan_losses", 1.0, prog_bar=True, batch_size=phonemes.size(0))
+            return dummy_loss
+        else:
+            self.log("train/nan_losses", 0.0, prog_bar=False, batch_size=phonemes.size(0))
+        
+        # Calculate total loss with better scaling
+        # Make sure KL loss is reduced to scalar properly
+        kl_loss = losses["kl_loss"].mean() if losses["kl_loss"].dim() > 0 else losses["kl_loss"]
+        
+        # Use more balanced loss weights initially to prevent any single loss from dominating
+        duration_weight = self.config.training.loss_weights.duration
+        f0_weight = self.config.training.loss_weights.f0
+        mel_weight = self.config.training.loss_weights.mel
+        kl_weight = 0.1  # Small but non-zero weight for KL loss
+        
+        # Compute weighted average (more numerically stable than large sums)
         total_loss = (
-            self.config.training.loss_weights.duration * losses["duration_loss"] +
-            self.config.training.loss_weights.f0 * losses["f0_loss"] +
-            self.config.training.loss_weights.mel * losses["mel_loss"] +
-            0.1 * losses["kl_loss"].mean()  # Apply mean to reduce to scalar
+            duration_weight * losses["duration_loss"] +
+            f0_weight * losses["f0_loss"] +
+            mel_weight * losses["mel_loss"] +
+            kl_weight * kl_loss
         )
         
-        # Check for NaN values
+        # Check for NaN values in final loss
         if torch.isnan(total_loss) or torch.isinf(total_loss):
+            print(f"WARNING: NaN/Inf in total_loss for batch {batch_idx}, using fallback")
             self.log("train/nan_detected", 1.0, prog_bar=True, batch_size=phonemes.size(0))
             # Use a small constant loss to keep training going
             total_loss = torch.tensor(1.0, device=self.device, requires_grad=True)
         else:
             self.log("train/nan_detected", 0.0, prog_bar=False, batch_size=phonemes.size(0))
             
-        # Log losses - ensure KL loss is a scalar by taking the mean
+        # Log individual losses
         self.log("train/duration_loss", losses["duration_loss"], prog_bar=True, batch_size=phonemes.size(0))
-        self.log("train/f0_loss", losses["f0_loss"], prog_bar=True)
-        self.log("train/mel_loss", losses["mel_loss"], prog_bar=True)
-        self.log("train/kl_loss", losses["kl_loss"].mean(), prog_bar=False)  # Apply mean to reduce to scalar
-        self.log("train/total_loss", total_loss, prog_bar=True)
+        self.log("train/f0_loss", losses["f0_loss"], prog_bar=True, batch_size=phonemes.size(0))
+        self.log("train/mel_loss", losses["mel_loss"], prog_bar=True, batch_size=phonemes.size(0))
+        self.log("train/kl_loss", kl_loss, prog_bar=False, batch_size=phonemes.size(0))
+        self.log("train/total_loss", total_loss, prog_bar=True, batch_size=phonemes.size(0))
         
+        # Monitor gradient flow (add after backward() in optimizer_step)
         return total_loss
-    
+
+    def optimizer_step(self, epoch, batch_idx, optimizer, optimizer_idx, *args, **kwargs):
+        """
+        Custom optimizer step with gradient monitoring.
+        """
+        # Call parent's optimizer step
+        super().optimizer_step(epoch, batch_idx, optimizer, optimizer_idx, *args, **kwargs)
+        
+        # After optimizer step, monitor gradients
+        total_grad_norm = 0.0
+        max_grad = 0.0
+        min_grad = 0.0
+        
+        # Calculate gradient statistics
+        for name, param in self.named_parameters():
+            if param.grad is not None:
+                grad_norm = param.grad.norm().item()
+                total_grad_norm += grad_norm
+                max_grad = max(max_grad, grad_norm)
+                min_grad = min(min_grad, grad_norm)
+                
+                # Log individual gradient norms for key parameters
+                if 'flow_decoder' in name or 'duration_predictor' in name:
+                    self.log(f"grad/{name}", grad_norm, on_step=True, on_epoch=False)
+        
+        # Log overall gradient statistics
+        self.log("grad/total_norm", total_grad_norm, on_step=True, on_epoch=False)
+        self.log("grad/max_norm", max_grad, on_step=True, on_epoch=False)
+        self.log("grad/min_norm", min_grad, on_step=True, on_epoch=False)
+        
+        # Check if gradients are vanishing or exploding
+        if total_grad_norm < 1e-4:
+            self.log("grad/vanishing", 1.0, on_step=True, on_epoch=False)
+        else:
+            self.log("grad/vanishing", 0.0, on_step=True, on_epoch=False)
+            
+        if max_grad > 1000:
+            self.log("grad/exploding", 1.0, on_step=True, on_epoch=False)
+        else:
+            self.log("grad/exploding", 0.0, on_step=True, on_epoch=False)
+            
     def validation_step(self, batch, batch_idx):
         """
         Validation step.

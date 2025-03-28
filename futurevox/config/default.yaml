@@ -37,7 +37,7 @@ model:
   predictors:
     duration_predictor:
       kernel_size: 3
-      dropout: 0.5
+      dropout: 0.2
       
     f0_predictor:
       kernel_size: 3
@@ -47,7 +47,7 @@ model:
   flow_decoder:
     n_flows: 2  # Reduced from 4
     hidden_dim: 128  # Reduced from 256
-    kernel_size: 5
+    kernel_size: 3
     dilation_rate: 1
     
   # Vocoder (HiFi-GAN) - simpler configuration
@@ -78,7 +78,7 @@ training:
   # Optimizer (same as default)
   optimizer:
     name: "AdamW"
-    weight_decay: 0.01
+    weight_decay: 0.001
     
   # Scheduler (same as default)
   scheduler:
@@ -87,11 +87,11 @@ training:
     
   # Loss Weights (same as default)
   loss_weights:
-    mel: 45.0
+    mel: 15.0
     duration: 1.0
     f0: 1.0
-    gan: 1.0
-    fm: 2.0
+    gan: 0.5
+    fm: 1.0
 
 # Logging Configuration (more frequent)
 logging:

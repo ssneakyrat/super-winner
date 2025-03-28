@@ -10,9 +10,9 @@ from typing import Dict, List, Tuple, Optional, Union
 
 from config.model_config import FutureVoxConfig, ModelConfig
 
-def safe_inverse(weight, eps=1e-6):
+def safe_inverse(weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     """
-    Compute inverse of weight matrix, adding a small regularization to avoid singularity.
+    Compute numerically stable inverse of weight matrix.
     
     Args:
         weight: Weight matrix [out_channels, in_channels]
@@ -22,11 +22,21 @@ def safe_inverse(weight, eps=1e-6):
         Inverse weight matrix
     """
     # Add small diagonal regularization
-    weight = weight.clone()
-    diag_reg = torch.eye(weight.size(0), device=weight.device) * eps
-    weight = weight + diag_reg
+    n = weight.size(0)
+    eye = torch.eye(n, device=weight.device)
+    weight_reg = weight + eps * eye
     
-    return torch.inverse(weight)
+    # Compute inverse with better numerical stability
+    # Use SVD which is more stable than direct inverse
+    try:
+        U, S, V = torch.svd(weight_reg)
+        # Add eps to singular values to avoid division by very small numbers
+        S_inv = torch.diag(1.0 / (S + eps))
+        weight_inv = torch.matmul(V, torch.matmul(S_inv, U.t()))
+        return weight_inv
+    except Exception:
+        # Fallback to direct inverse with regularization if SVD fails
+        return torch.inverse(weight_reg)
             
 class TextEncoder(nn.Module):
     """Transformer-based text encoder for phoneme sequences."""
@@ -93,8 +103,8 @@ class TextEncoder(nn.Module):
 
 class DurationPredictor(nn.Module):
     """
-    Enhanced duration predictor module with more capacity.
-    Predicts phoneme durations in log domain.
+    Improved duration predictor module with more accurate predictions.
+    Predicts phoneme durations in log domain with proper activation function.
     """
     
     def __init__(self, config, input_dim):
@@ -109,12 +119,12 @@ class DurationPredictor(nn.Module):
         
         self.conv_layers = nn.ModuleList()
         self.kernel_size = config.kernel_size
-        hidden_dim = input_dim  # Can be increased for more capacity
+        hidden_dim = input_dim  # Match input dimension for residual connections
         
         # Initial projection
         self.pre_proj = nn.Linear(input_dim, hidden_dim)
         
-        # Convolution blocks - increased from 2 to 3 layers
+        # Convolution blocks - stable architecture
         for _ in range(3):
             self.conv_layers.append(
                 nn.Sequential(
@@ -124,26 +134,21 @@ class DurationPredictor(nn.Module):
                         padding=(config.kernel_size - 1) // 2
                     ),
                     nn.ReLU(),
-                    # Use GroupNorm instead of LayerNorm for Conv1D outputs
-                    nn.GroupNorm(8, hidden_dim),  # 8 groups for better stability
+                    nn.GroupNorm(min(8, hidden_dim), hidden_dim),  # Handle case when hidden_dim < 8
                     nn.Dropout(config.dropout)
                 )
             )
         
-        # Final projection with residual connection
-        self.final_conv = nn.Conv1d(
-            hidden_dim, hidden_dim,
-            kernel_size=config.kernel_size,
-            padding=(config.kernel_size - 1) // 2
-        )
-        self.final_norm = nn.GroupNorm(8, hidden_dim)
-        
-        # Output projection to scalar
+        # Final projection with proper scale
         self.proj = nn.Linear(hidden_dim, 1)
+        
+        # Initialize final layer carefully
+        nn.init.zeros_(self.proj.bias)
+        nn.init.xavier_normal_(self.proj.weight)
         
     def forward(self, x):
         """
-        Forward pass.
+        Forward pass with improved numerical behavior.
         
         Args:
             x: Input features [B, L, H]
@@ -151,16 +156,25 @@ class DurationPredictor(nn.Module):
         Returns:
             Log durations [B, L, 1]
         """
+        # Input checks
+        if torch.isnan(x).any():
+            print("WARNING: NaN values detected in duration predictor input")
+            # Replace NaNs with zeros to prevent propagation
+            x = torch.nan_to_num(x, nan=0.0)
+        
         # Initial projection
         x = F.relu(self.pre_proj(x))
         
         # Transpose for 1D convolution
         x_conv = x.transpose(1, 2)  # [B, H, L]
         
+        # Save original sequence length
+        original_len = x_conv.size(2)
+        
         # Check if sequence length is too small and pad if necessary
         min_length = self.kernel_size
-        if x_conv.size(2) < min_length:
-            padding_needed = min_length - x_conv.size(2)
+        if original_len < min_length:
+            padding_needed = min_length - original_len
             x_conv = F.pad(x_conv, (0, padding_needed))
         
         # Apply convolution layers with residual connections
@@ -169,22 +183,19 @@ class DurationPredictor(nn.Module):
             x_conv = layer(x_conv) + residual  # Add residual connection
             residual = x_conv  # Update residual for next layer
         
-        # Final convolution with residual
-        x_conv = F.relu(self.final_norm(self.final_conv(x_conv))) + residual
-        
-        # Transpose back
+        # Transpose back and restore original sequence length
         x = x_conv.transpose(1, 2)  # [B, L, H]
+        if original_len < min_length:
+            x = x[:, :original_len, :]
         
-        # Trim to original length if padded
-        original_len = min(x.size(1), x.size(1))
-        x = x[:, :original_len, :]
+        # Project to scalar and apply activation for positive durations
+        # We use softplus for smoother gradients and to ensure positive durations
+        raw_durations = self.proj(x)  # [B, L, 1]
         
-        # Project to scalar - important change to avoid zero predictions
-        log_durations = self.proj(x)  # [B, L, 1]
-        
-        # Add small offset to prevent extreme negative values in log space
-        # This helps ensure predicted durations won't be too close to zero
-        log_durations = log_durations + 1.0
+        # Use log(softplus(x)) for numerical stability
+        # This ensures positive durations while allowing proper gradients
+        # Adding a small offset (1.0) helps avoid extreme values
+        log_durations = torch.log(F.softplus(raw_durations) + 1.0)
         
         return log_durations
 
@@ -278,54 +289,163 @@ class F0Predictor(nn.Module):
 
 class AffineCouplingLayer(nn.Module):
     """
-    Affine coupling layer for normalizing flow.
-    Based on the design in VITS and Flow-TTS.
+    Improved affine coupling layer for normalizing flow.
+    Ensures proper dimension handling and numerical stability.
     """
     
-    def __init__(self, config, in_channels):
+    def __init__(self, hidden_dim: int, channels: int):
         """
         Initialize affine coupling layer.
         
         Args:
-            config: Flow decoder configuration
-            in_channels: Input channel dimension
+            hidden_dim: Hidden dimension size
+            channels: Number of input/output channels
         """
         super().__init__()
         
-        self.in_channels = in_channels
-        self.hidden_dim = config.hidden_dim
+        self.channels = channels
+        self.hidden_dim = hidden_dim
         
         # Split in half
-        self.half_channels = in_channels // 2
+        self.half_channels = channels // 2
         
         # WaveNet-like dilated convolution network
-        self.pre = nn.Conv1d(self.half_channels, self.hidden_dim, 1)
+        self.pre = nn.Conv1d(self.half_channels, hidden_dim, 1)
         
-        self.convs = nn.ModuleList()
-        self.res_skip_layers = nn.ModuleList()
+        # Simpler architecture with fewer conv layers to avoid instability
+        self.convs = nn.ModuleList([
+            nn.Conv1d(
+                hidden_dim, hidden_dim * 2,
+                kernel_size=3, dilation=dilation,
+                padding=dilation
+            ) for dilation in [1, 3, 9]
+        ])
         
-        for i in range(3):  # 3 dilation cycles
-            dilation_rates = [1, 3, 9]  # Dilation rates
-            
-            # Dilated convolution
-            self.convs.append(
-                nn.Conv1d(
-                    self.hidden_dim, self.hidden_dim * 2,
-                    kernel_size=config.kernel_size,
-                    dilation=dilation_rates[i],
-                    padding=int((config.kernel_size * dilation_rates[i] - dilation_rates[i]) / 2)
-                )
-            )
-            
-            # Residual and skip connections
-            self.res_skip_layers.append(
-                nn.Conv1d(self.hidden_dim, self.hidden_dim + self.half_channels * 2, 1)
-            )
-            
-        # Output projection
-        self.out = nn.Conv1d(self.hidden_dim, self.half_channels * 2, 1)
+        # Separate layers for residual and scale/shift - better for stability
+        self.res_layers = nn.ModuleList([
+            nn.Conv1d(hidden_dim, hidden_dim, 1)
+            for _ in range(len(self.convs))
+        ])
         
-    def forward(self, x, reverse=False):
+        # Final layer with explicit scaling
+        self.scale_shift = nn.Conv1d(hidden_dim, self.half_channels * 2, 1)
+        
+        # Apply proper initialization to avoid extreme values
+        for layer in self.convs:
+            nn.init.kaiming_normal_(layer.weight)
+        for layer in self.res_layers:
+            nn.init.kaiming_normal_(layer.weight)
+            nn.init.zeros_(layer.bias)  # Zero init for stability
+        
+        # Initialize the scale to be close to identity
+        nn.init.zeros_(self.scale_shift.weight)
+        nn.init.zeros_(self.scale_shift.bias)
+        
+    def forward(self, x: torch.Tensor, reverse: bool = False) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """
+        Forward pass with improved dimension handling.
+        
+        Args:
+            x: Input tensor [B, C, T]
+            reverse: Whether to reverse the flow direction
+            
+        Returns:
+            Tuple of (transformed tensor, log determinant)
+        """
+        # Ensure even channel splitting
+        if self.channels % 2 != 0:
+            raise ValueError(f"Channel count ({self.channels}) must be even for coupling layer")
+        
+        # Split in half
+        xa, xb = torch.split(x, [self.half_channels, self.half_channels], 1)
+        
+        if not reverse:
+            # Forward direction (encoding)
+            # Initial projection
+            h = self.pre(xa)
+            
+            # Apply convolution layers with residual connections
+            for i, (conv, res_layer) in enumerate(zip(self.convs, self.res_layers)):
+                h_conv = conv(h)
+                h_conv_chunks = torch.chunk(F.gelu(h_conv), 2, 1)
+                
+                # Residual connection
+                h = h + h_conv_chunks[0]
+                h = res_layer(h)  # Extra processing
+            
+            # Get scale and shift parameters with numerical safeguards
+            params = self.scale_shift(h)
+            log_scale, shift = torch.chunk(params, 2, 1)
+            
+            # Constrain log_scale for numerical stability (tanh + scaling)
+            log_scale = torch.tanh(log_scale) * 0.5  # Keep scale factors bounded
+            
+            # Apply affine transformation: y = exp(log_s) * x + b
+            scale = torch.exp(log_scale)
+            y = scale * xb + shift
+            
+            # Calculate log determinant
+            logdet = torch.sum(log_scale, dim=[1, 2])
+            
+            # Recombine transformed parts
+            z = torch.cat([xa, y], 1)
+            
+            return z, logdet
+            
+        else:
+            # Reverse direction (decoding)
+            # Initial projection
+            h = self.pre(xa)
+            
+            # Apply convolution layers with residual connections
+            for i, (conv, res_layer) in enumerate(zip(self.convs, self.res_layers)):
+                h_conv = conv(h)
+                h_conv_chunks = torch.chunk(F.gelu(h_conv), 2, 1)
+                
+                # Residual connection
+                h = h + h_conv_chunks[0]
+                h = res_layer(h)  # Extra processing
+            
+            # Get scale and shift parameters
+            params = self.scale_shift(h)
+            log_scale, shift = torch.chunk(params, 2, 1)
+            
+            # Constrain log_scale for numerical stability (tanh + scaling)
+            log_scale = torch.tanh(log_scale) * 0.5
+            
+            # Apply inverse transformation: x = (y - b) / exp(log_s)
+            scale = torch.exp(log_scale)
+            x_b = (xb - shift) / (scale + 1e-8)  # Add epsilon to avoid division by zero
+            
+            # Recombine transformed parts
+            z = torch.cat([xa, x_b], 1)
+            
+            return z
+
+class InvertibleConv1x1(nn.Module):
+    """
+    Improved invertible 1x1 convolution for flow models.
+    Uses more stable initialization and inversion techniques.
+    """
+    
+    def __init__(self, channels: int):
+        """
+        Initialize invertible 1x1 convolution.
+        
+        Args:
+            channels: Number of channels
+        """
+        super().__init__()
+        
+        # Initialize with an orthogonal matrix for better stability
+        w_init = torch.qr(torch.randn(channels, channels))[0]
+        self.weight = nn.Parameter(w_init.unsqueeze(2))  # [C, C, 1]
+        
+        # Register buffer for inverse
+        self.register_buffer('weight_inverse', None)
+        self.register_buffer('logdet_multiplier', None)
+    
+    def forward(self, x: torch.Tensor, reverse: bool = False) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
         Forward pass.
         
@@ -334,90 +454,41 @@ class AffineCouplingLayer(nn.Module):
             reverse: Whether to reverse the flow direction
             
         Returns:
-            Transformed tensor [B, C, T] and log determinant
+            Tuple of (transformed tensor, log determinant)
         """
-        # Split in half
-        xa, xb = torch.split(x, [self.half_channels, self.half_channels], 1)
+        weight = self.weight  # [C, C, 1]
+        batch_size, channels, time_steps = x.size()
+        
+        # Compute logdet multiplier only once
+        if self.logdet_multiplier is None or self.logdet_multiplier.shape[0] != time_steps:
+            self.logdet_multiplier = torch.ones([1], device=x.device) * time_steps
         
         if not reverse:
-            # Forward direction (encoding)
-            h = self.pre(xa)
-            log_s_total = 0
+            # Forward direction
+            z = F.conv1d(x, weight)
             
-            for i in range(len(self.convs)):
-                h_conv = self.convs[i](h)
-                h_conv = F.gelu(h_conv)
-                
-                h_conv_chunks = torch.chunk(h_conv, 2, 1)
-                h = h + h_conv_chunks[0]
-                
-                res_skip = self.res_skip_layers[i](h)
-                skip = torch.chunk(res_skip, 2, 1)[1]
-                
-                if i < len(self.convs) - 1:
-                    h = res_skip[:, :self.hidden_dim]
-                
-                # FIX: Ensure log_s and b have the same number of channels as xb
-                log_s = skip[:, :self.half_channels]
-                b = skip[:, self.half_channels:2*self.half_channels]  # Only take half_channels for b too
-                
-                # Ensure dimensions match before operating
-                if log_s.size(1) != xb.size(1) or b.size(1) != xb.size(1):
-                    # Debug info - can be removed after fix is confirmed
-                    print(f"Dimension mismatch: log_s={log_s.size()}, b={b.size()}, xb={xb.size()}")
-                    # Explicitly reshape to match dimensions if needed
-                    log_s = log_s[:, :xb.size(1)]
-                    b = b[:, :xb.size(1)]
-                
-                xb = torch.exp(log_s) * xb + b
-                log_s_total = log_s_total + log_s
+            # Compute log determinant
+            logdet = torch.logdet(weight.squeeze(2)) * self.logdet_multiplier
             
-            # Concatenate transformed halves
-            x = torch.cat([xa, xb], 1)
-            logdet = torch.sum(log_s_total, [1, 2])
-            
-            return x, logdet
-            
+            return z, logdet
         else:
-            # Reverse direction (decoding)
-            h = self.pre(xa)
+            # Reverse direction
+            if self.weight_inverse is None:
+                # Compute inverse weight matrix
+                self.weight_inverse = safe_inverse(weight.squeeze(2)).unsqueeze(2)
             
-            for i in range(len(self.convs)):
-                h_conv = self.convs[i](h)
-                h_conv = F.gelu(h_conv)
-                
-                h_conv_chunks = torch.chunk(h_conv, 2, 1)
-                h = h + h_conv_chunks[0]
-                
-                res_skip = self.res_skip_layers[i](h)
-                skip = torch.chunk(res_skip, 2, 1)[1]
-                
-                if i < len(self.convs) - 1:
-                    h = res_skip[:, :self.hidden_dim]
-                
-                # FIX: Ensure log_s and b have the same number of channels as xb
-                log_s = skip[:, :self.half_channels]
-                b = skip[:, self.half_channels:2*self.half_channels]  # Only take half_channels for b too
-                
-                # Ensure dimensions match before operating
-                if log_s.size(1) != xb.size(1) or b.size(1) != xb.size(1):
-                    log_s = log_s[:, :xb.size(1)]
-                    b = b[:, :xb.size(1)]
-                
-                xb = (xb - b) / torch.exp(log_s)
+            # Apply inverse transformation
+            z = F.conv1d(x, self.weight_inverse)
             
-            # Concatenate transformed halves
-            x = torch.cat([xa, xb], 1)
-            
-            return x
-
+            return z
+        
 class FlowDecoder(nn.Module):
     """
-    Flow-based decoder.
-    Transforms phoneme features to mel-spectrograms using normalizing flows.
+    Improved flow-based decoder.
+    Uses more stable flow layers and properly handles dimensions.
     """
     
-    def __init__(self, config, input_dim, output_dim):
+    def __init__(self, config, input_dim: int, output_dim: int):
         """
         Initialize flow decoder.
         
@@ -428,7 +499,10 @@ class FlowDecoder(nn.Module):
         """
         super().__init__()
         
-        self.flows = nn.ModuleList()
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.hidden_dim = config.hidden_dim
+        self.n_flows = config.n_flows
         
         # Prior distribution parameters
         self.prior_lstm = nn.LSTM(
@@ -438,21 +512,35 @@ class FlowDecoder(nn.Module):
         
         self.prior_proj = nn.Linear(input_dim, output_dim * 2)
         
-        # Flow layers
-        for _ in range(config.n_flows):
+        # Flow layers with better initialization
+        self.flows = nn.ModuleList()
+        
+        # Create flow sequence
+        for _ in range(self.n_flows):
+            # Coupling layer
             self.flows.append(
-                AffineCouplingLayer(config, output_dim)
+                AffineCouplingLayer(self.hidden_dim, output_dim)
             )
             
-            # Add invertible 1x1 convolution (permutation)
-            conv = nn.Conv1d(output_dim, output_dim, kernel_size=1)
-            nn.init.orthogonal_(conv.weight)
-            conv.bias.data.zero_()
-            self.flows.append(conv)
+            # Invertible 1x1 convolution for permutation
+            self.flows.append(
+                InvertibleConv1x1(output_dim)
+            )
         
-    def forward(self, x, x_mask=None, temperature=1.0, reverse=False):
+        # Initialize LSTM and projection with proper ranges
+        for name, param in self.prior_lstm.named_parameters():
+            if 'weight' in name:
+                nn.init.xavier_normal_(param)
+            elif 'bias' in name:
+                nn.init.zeros_(param)
+        
+        nn.init.xavier_normal_(self.prior_proj.weight)
+        nn.init.zeros_(self.prior_proj.bias)
+            
+    def forward(self, x: torch.Tensor, x_mask: Optional[torch.Tensor] = None, 
+                temperature: float = 1.0, reverse: bool = False):
         """
-        Forward pass.
+        Forward pass with improved reliability.
         
         Args:
             x: Input features [B, L, H]
@@ -463,19 +551,27 @@ class FlowDecoder(nn.Module):
         Returns:
             Mel-spectrogram and KL divergence
         """
+        B, L, H = x.shape
+        
+        # Calculate prior distribution parameters
+        x_lstm, _ = self.prior_lstm(x)
+        prior_params = self.prior_proj(x_lstm)  # [B, L, output_dim*2]
+        
+        # Split into mean and log variance
+        prior_mean, prior_log_var = torch.chunk(
+            prior_params, 2, dim=2
+        )
+        
+        # Constrain variance for stability
+        prior_log_var = torch.clamp(prior_log_var, min=-8.0, max=8.0)
+        
+        # Transpose to [B, D, L] format for flows
         if not reverse:
-            # Forward direction (during training)
-            # Calculate prior distribution parameters
-            x_lstm, _ = self.prior_lstm(x)
-            prior_params = self.prior_proj(x_lstm)  # [B, L, output_dim*2]
+            # Forward direction (encoding)
             
-            # Split into mean and log variance
-            prior_mean, prior_log_var = torch.chunk(
-                prior_params, 2, dim=2
-            )
-            
-            # Sample from prior
-            z = prior_mean + torch.randn_like(prior_mean) * torch.exp(prior_log_var * 0.5) * temperature
+            # Sample from prior with temperature control
+            eps = torch.randn_like(prior_mean) * temperature
+            z = prior_mean + torch.exp(0.5 * prior_log_var) * eps
             
             # Apply mask if provided
             if x_mask is not None:
@@ -485,19 +581,14 @@ class FlowDecoder(nn.Module):
             z = z.transpose(1, 2)  # [B, output_dim, L]
             
             # Apply flow transforms
-            logdet_sum = 0
+            logdet_sum = torch.zeros([B], device=z.device)
             
-            for i, flow in enumerate(self.flows):
-                if isinstance(flow, AffineCouplingLayer):
-                    z, logdet = flow(z, reverse=False)
-                    logdet_sum = logdet_sum + logdet
-                else:
-                    # 1x1 convolution - FIX: Use the weight directly without unsqueeze
-                    z = F.conv1d(z, flow.weight, bias=flow.bias)
-                    logdet = torch.logdet(flow.weight.squeeze(2)) * z.shape[2]
+            for flow in self.flows:
+                z, logdet = flow(z, reverse=False)
+                if logdet is not None:
                     logdet_sum = logdet_sum + logdet
             
-            # Calculate KL divergence
+            # Calculate KL divergence (more stable version)
             prior_var = torch.exp(prior_log_var)
             kl = 0.5 * torch.sum(
                 prior_var + prior_mean**2 - 1 - prior_log_var,
@@ -511,17 +602,10 @@ class FlowDecoder(nn.Module):
             
         else:
             # Reverse direction (during inference)
-            # Calculate prior distribution parameters
-            x_lstm, _ = self.prior_lstm(x)
-            prior_params = self.prior_proj(x_lstm)  # [B, L, output_dim*2]
             
-            # Split into mean and log variance
-            prior_mean, prior_log_var = torch.chunk(
-                prior_params, 2, dim=2
-            )
-            
-            # Sample from prior
-            z = prior_mean + torch.randn_like(prior_mean) * torch.exp(prior_log_var * 0.5) * temperature
+            # Sample from prior with temperature control
+            eps = torch.randn_like(prior_mean) * temperature
+            z = prior_mean + torch.exp(0.5 * prior_log_var) * eps
             
             # Apply mask if provided
             if x_mask is not None:
@@ -532,14 +616,8 @@ class FlowDecoder(nn.Module):
             
             # Apply flow transforms in reverse order
             for flow in reversed(self.flows):
-                if isinstance(flow, AffineCouplingLayer):
-                    z = flow(z, reverse=True)
-                else:
-                    # Inverse 1x1 convolution - FIX: Use safe_inverse function
-                    weight_2d = flow.weight.squeeze(2)  # Remove kernel dimension to get 2D tensor
-                    weight_inv_2d = safe_inverse(weight_2d, eps=1e-6)  # Compute inverse with regularization
-                    weight_inv_3d = weight_inv_2d.unsqueeze(2)  # Add kernel dimension back to get 3D tensor
-                    z = F.conv1d(z - flow.bias.unsqueeze(1), weight_inv_3d)
+                z = flow(z, reverse=True)
+                # No need to track logdet during inference
             
             # Transpose back
             z = z.transpose(1, 2)  # [B, L, output_dim]
