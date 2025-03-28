@@ -82,6 +82,11 @@ def parse_args():
         help="Save checkpoint every N steps (overrides config)"
     )
     
+    parser.add_argument(
+        "--no_precomputed_mels", action="store_true",
+        help="Disable use of pre-computed mel spectrograms"
+    )
+    
     return parser.parse_args()
 
 
@@ -132,7 +137,8 @@ def main():
         config=config.data,
         batch_size=config.training.batch_size,
         num_workers=args.num_workers,
-        limit_dataset_size=args.limit_dataset
+        limit_dataset_size=args.limit_dataset,
+        use_precomputed_mels=not args.no_precomputed_mels
     )
 
     # Explicitly call setup to load phoneme dictionary

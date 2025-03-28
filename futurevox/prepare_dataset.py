@@ -11,10 +11,12 @@ import json
 import glob
 import shutil
 import librosa
+import numpy as np
 from tqdm import tqdm
 from typing import Dict, List, Tuple, Set
 
 from config.model_config import FutureVoxConfig
+from utils.audio import audio_to_mel, load_audio  # Add import for audio processing functions
 
 
 def parse_args():
@@ -46,8 +48,82 @@ def parse_args():
         help="Copy files to output directory instead of using paths"
     )
     
+    parser.add_argument(
+        "--save_mels", action="store_true",
+        help="Extract and save mel spectrograms for faster training"
+    )
+    
     return parser.parse_args()
 
+def extract_and_save_mel_spectrograms(
+    pairs: List[Tuple[str, str]],
+    input_dir: str,
+    output_dir: str,
+    config: DataConfig
+) -> None:
+    """
+    Extract and save mel spectrograms for all audio files.
+    
+    Args:
+        pairs: List of (lab_path, wav_path) pairs
+        input_dir: Input directory containing WAV files
+        output_dir: Output directory
+        config: Data configuration
+    """
+    # Create mel directory
+    mel_dir = os.path.join(output_dir, "mel")
+    os.makedirs(mel_dir, exist_ok=True)
+    
+    print("Extracting and saving mel spectrograms...")
+    for lab_path, wav_path in tqdm(pairs):
+        # Determine output path - mirror the wav file structure
+        rel_path = os.path.relpath(wav_path, input_dir)
+        mel_path = os.path.join(mel_dir, os.path.splitext(rel_path)[0] + ".npy")
+        
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(mel_path), exist_ok=True)
+        
+        # Load audio
+        audio = load_audio(wav_path, sample_rate=config.sample_rate)
+        
+        # Compute mel spectrogram
+        mel = audio_to_mel(audio, config)
+        
+        # Save mel spectrogram
+        np.save(mel_path, mel)
+
+def create_mel_mapping(
+    pairs: List[Tuple[str, str]],
+    input_dir: str,
+    output_dir: str
+) -> None:
+    """
+    Create a mapping from sample IDs to mel spectrogram files.
+    
+    Args:
+        pairs: List of (lab_path, wav_path) pairs
+        input_dir: Input directory containing WAV files
+        output_dir: Output directory
+    """
+    # Create mapping
+    mapping = {}
+    
+    for lab_path, wav_path in pairs:
+        # Get sample ID (filename without extension)
+        sample_id = os.path.splitext(os.path.basename(lab_path))[0]
+        
+        # Determine mel path - mirror the wav file structure
+        rel_path = os.path.relpath(wav_path, input_dir)
+        mel_path = os.path.join("mel", os.path.splitext(rel_path)[0] + ".npy")
+        
+        # Add to mapping
+        mapping[sample_id] = mel_path
+    
+    # Save mapping
+    with open(os.path.join(output_dir, "mel_mapping.json"), "w") as f:
+        json.dump(mapping, f, indent=2)
+    
+    print(f"Created mel mapping with {len(mapping)} entries")
 
 def find_lab_wav_pairs(input_dir: str) -> List[Tuple[str, str]]:
     """
@@ -411,6 +487,20 @@ def main():
             test_pairs,
             input_dir
         )
+    
+    extract_and_save_mel_spectrograms(
+        pairs,
+        input_dir,
+        output_dir,
+        config.data
+    )
+    
+    # Create mel mapping
+    create_mel_mapping(
+        pairs,
+        input_dir,
+        output_dir
+    )
     
     print(f"Dataset preparation complete!")
     print(f"Output directory: {output_dir}")

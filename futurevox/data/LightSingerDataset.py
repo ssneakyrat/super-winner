@@ -28,7 +28,8 @@ class LightSingerDataset(Dataset):
         data_dir: str,
         config: DataConfig,
         split: str = "train",
-        limit_dataset_size: Optional[int] = None
+        limit_dataset_size: Optional[int] = None,
+        use_precomputed_mels: bool = True
     ):
         """
         Initialize dataset.
@@ -38,11 +39,13 @@ class LightSingerDataset(Dataset):
             config: Data configuration
             split: Dataset split ("train", "val", or "test")
             limit_dataset_size: Limit dataset to first N items (for debugging)
+            use_precomputed_mels: Whether to use pre-computed mel spectrograms
         """
         super().__init__()
         self.data_dir = data_dir
         self.config = config
         self.split = split
+        self.use_precomputed_mels = use_precomputed_mels
         
         # Load phoneme dictionary if it exists
         self.phoneme_dict = self._load_phoneme_dict()
@@ -54,6 +57,16 @@ class LightSingerDataset(Dataset):
         # Limit dataset size if needed
         if limit_dataset_size is not None:
             self.metadata = self.metadata[:limit_dataset_size]
+        
+        # Load mel mapping if available
+        self.mel_mapping = {}
+        mel_mapping_path = os.path.join(data_dir, "mel_mapping.json")
+        if os.path.exists(mel_mapping_path) and use_precomputed_mels:
+            with open(mel_mapping_path, "r") as f:
+                self.mel_mapping = json.load(f)
+                logger.info(f"Loaded mel mapping with {len(self.mel_mapping)} entries")
+        elif use_precomputed_mels:
+            logger.warning(f"No mel mapping found at {mel_mapping_path}. Will compute mel spectrograms on-the-fly.")
             
         logger.info(f"Loaded {len(self.metadata)} samples for {split} split")
     
@@ -312,14 +325,25 @@ class LightSingerDataset(Dataset):
         # Extract F0
         f0 = self._extract_f0(audio, durations)
         
-        # Compute mel spectrogram
-        mel = self._compute_mel_spectrogram(audio)
+        # Compute or load mel spectrogram
+        if self.use_precomputed_mels and item["id"] in self.mel_mapping:
+            # Load pre-computed mel spectrogram
+            mel_path = os.path.join(self.data_dir, self.mel_mapping[item["id"]])
+            try:
+                mel = np.load(mel_path)
+                mel = torch.tensor(mel, dtype=torch.float)
+            except Exception as e:
+                logger.warning(f"Failed to load pre-computed mel spectrogram from {mel_path}: {e}")
+                # Fall back to computing on-the-fly
+                mel = self._compute_mel_spectrogram(audio)
+        else:
+            # Compute mel spectrogram on-the-fly
+            mel = self._compute_mel_spectrogram(audio)
         
         # Convert to tensors
         phoneme_ids = torch.tensor(phoneme_ids, dtype=torch.long)
         durations = torch.tensor(durations, dtype=torch.long)
         f0 = torch.tensor(f0, dtype=torch.float)
-        mel = torch.tensor(mel, dtype=torch.float)
         
         # Return item
         return {
@@ -356,7 +380,8 @@ class LightSingerDataModule(pl.LightningDataModule):
         config: DataConfig,
         batch_size: int = 16,
         num_workers: int = 4,
-        limit_dataset_size: Optional[int] = None
+        limit_dataset_size: Optional[int] = None,
+        use_precomputed_mels: bool = True
     ):
         """
         Initialize data module.
@@ -367,6 +392,7 @@ class LightSingerDataModule(pl.LightningDataModule):
             batch_size: Batch size
             num_workers: Number of workers for data loading
             limit_dataset_size: Limit dataset to first N items (for debugging)
+            use_precomputed_mels: Whether to use pre-computed mel spectrograms
         """
         super().__init__()
         self.data_dir = data_dir
@@ -374,6 +400,7 @@ class LightSingerDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.limit_dataset_size = limit_dataset_size
+        self.use_precomputed_mels = use_precomputed_mels
         
         self.train_dataset = None
         self.val_dataset = None
@@ -402,13 +429,15 @@ class LightSingerDataModule(pl.LightningDataModule):
                 self.data_dir,
                 self.config,
                 split="train",
-                limit_dataset_size=self.limit_dataset_size
+                limit_dataset_size=self.limit_dataset_size,
+                use_precomputed_mels=self.use_precomputed_mels
             )
             self.val_dataset = LightSingerDataset(
                 self.data_dir,
                 self.config,
                 split="val",
-                limit_dataset_size=self.limit_dataset_size
+                limit_dataset_size=self.limit_dataset_size,
+                use_precomputed_mels=self.use_precomputed_mels
             )
         
         if stage == "test" or stage is None:
@@ -416,7 +445,8 @@ class LightSingerDataModule(pl.LightningDataModule):
                 self.data_dir,
                 self.config,
                 split="test",
-                limit_dataset_size=self.limit_dataset_size
+                limit_dataset_size=self.limit_dataset_size,
+                use_precomputed_mels=self.use_precomputed_mels
             )
     
     def train_dataloader(self):
