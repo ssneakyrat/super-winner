@@ -143,7 +143,7 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Train FutureVox-Singer model')
-    parser.add_argument('--config', type=str, default='config/singer_config.yaml',
+    parser.add_argument('--config', type=str, default='config/default.yaml',
                         help='Path to configuration file')
     parser.add_argument('--data_path', type=str, default=None,
                         help='Path to HDF5 dataset file (overrides config)')

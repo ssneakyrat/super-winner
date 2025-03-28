@@ -10,7 +10,7 @@ from PIL import Image
 import librosa
 import librosa.display
 
-from models.singer_modules.futurevox_singer import FutureVoxSinger
+from models.model import FutureVoxSinger
 
 
 class FutureVoxSingerLightningModule(pl.LightningModule):

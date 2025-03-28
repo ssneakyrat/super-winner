@@ -270,7 +270,7 @@ class SingingVoxDataModule(pl.LightningDataModule):
         
         if h5_path is None:
             data_raw_path = config['datasets']['data_raw']
-            self.h5_path = os.path.join(data_raw_path, "binary", "singing_dataset.h5")
+            self.h5_path = os.path.join(data_raw_path, "binary", "gin.h5")
         else:
             self.h5_path = h5_path
             
