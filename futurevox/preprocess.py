@@ -3,21 +3,35 @@ import yaml
 import os
 import h5py
 import numpy as np
-
+import pandas as pd
 import matplotlib
 matplotlib.use('Agg')  # Use non-GUI backend to avoid Qt dependency
 import matplotlib.pyplot as plt
-import matplotlib.pyplot as plt
-from utils.audio import extract_mel_spectrogram
 import librosa
 import librosa.display
 from pathlib import Path
+from utils.audio import extract_mel_spectrogram
 
 def load_config(config_path="config/default.yaml"):
     """Load configuration from YAML file."""
     with open(config_path, 'r') as file:
         config = yaml.safe_load(file)
     return config
+
+def read_lab_file(lab_file):
+    """Read a .lab file and return phoneme timings."""
+    data = []
+    with open(lab_file, 'r') as f:
+        for line in f:
+            parts = line.strip().split()
+            if len(parts) == 3:
+                start_time, end_time, label = parts
+                data.append({
+                    'start_time': int(start_time),
+                    'end_time': int(end_time),
+                    'label': label
+                })
+    return data
 
 def plot_mel_spectrogram(mel_spectrogram, sr, hop_length, output_file=None, title="Mel Spectrogram"):
     plt.figure(figsize=(12, 4))
@@ -60,17 +74,53 @@ def main():
             file_name = os.path.splitext(file)[0]
             file_name = os.path.basename(os.path.normpath(file_name))
             wav_path = data_raw_dir + '/wav/' + file_name + '.wav'
-            mel_spec, sr = extract_mel_spectrogram(wav_path, n_mels=config['audio']['n_mels'], n_fft=config['audio']['n_fft'], hop_length=config['audio']['hop_length'])
-            hf.create_dataset(f'lab{index_id}', data=file)
-            hf.create_dataset(f'mel{index_id}', data=mel_spec)
-            hf.create_dataset(f'sr{index_id}', data=sr)
-            index_id = index_id+1
+            
+            # Skip if WAV file doesn't exist
+            if not os.path.exists(wav_path):
+                print(f"Warning: WAV file not found for {file_name}, skipping")
+                continue
+            
+            # Extract mel spectrogram
+            mel_spec, sr = extract_mel_spectrogram(
+                wav_path, 
+                n_mels=config['audio']['n_mels'], 
+                n_fft=config['audio']['n_fft'], 
+                hop_length=config['audio']['hop_length']
+            )
+            
+            # Read phoneme labels from lab file
+            phoneme_data = read_lab_file(file_path)
+            
+            # Create a group for this sample
+            sample_group = hf.create_group(f'sample{index_id}')
+            
+            # Store file information
+            sample_group.create_dataset('file_name', data=file_name)
+            sample_group.create_dataset('lab_file', data=file)
+            
+            # Store mel spectrogram
+            sample_group.create_dataset('mel_spectrogram', data=mel_spec)
+            sample_group.create_dataset('sample_rate', data=sr)
+            
+            # Store phoneme data
+            phoneme_group = sample_group.create_group('phonemes')
+            for i, phoneme in enumerate(phoneme_data):
+                phoneme_item = phoneme_group.create_group(f'phoneme{i}')
+                phoneme_item.create_dataset('start_time', data=phoneme['start_time'])
+                phoneme_item.create_dataset('end_time', data=phoneme['end_time'])
+                phoneme_item.create_dataset('label', data=phoneme['label'])
+            
+            # Store number of phonemes
+            sample_group.create_dataset('phoneme_count', data=len(phoneme_data))
+            
+            print(f"Processed {file_name}: {len(phoneme_data)} phonemes")
+            index_id += 1
     
-    hf.create_dataset('pair_num', data=index_id)
-
-    #print(f"Found {len(all_lab)} files.")
-    #return all_lab
+    # Store total number of samples
+    hf.create_dataset('sample_count', data=index_id)
     
+    print(f"Successfully processed {index_id} samples and stored in {singerName}.h5")
+    hf.close()
 
 if __name__ == "__main__":
     main()
