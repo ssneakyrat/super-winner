@@ -24,7 +24,7 @@ class FutureVoxLightningModule(pl.LightningModule):
         self.model = FutureVoxModel(config, num_phonemes)
         
         # Store configuration
-        self.learning_rate = config['training']['learning_rate']
+        self.learning_rate = float(config['training']['learning_rate'])
         
         # Define loss functions
         self.mse_loss = nn.MSELoss()

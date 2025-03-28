@@ -21,19 +21,18 @@ class FutureVoxDataset(Dataset):
         self.h5_path = h5_path
         self.split = split
         
-        # Open HDF5 file in read mode
-        self.h5_file = h5py.File(h5_path, 'r')
-        
-        # Get file list
-        file_list = self.h5_file['metadata']['file_list'][:]
-        self.file_ids = [name.decode('utf-8') for name in file_list]
-        
-        # Split files into train and validation (80/20 split)
-        if split == 'train':
-            self.file_ids = self.file_ids[:int(len(self.file_ids) * 0.8)]
-        else:  # validation
-            self.file_ids = self.file_ids[int(len(self.file_ids) * 0.8):]
+        # Open HDF5 file temporarily to get file list
+        with h5py.File(h5_path, 'r') as h5_file:
+            # Get file list
+            file_list = h5_file['metadata']['file_list'][:]
+            self.file_ids = [name.decode('utf-8') for name in file_list]
             
+            # Split files into train and validation (80/20 split)
+            if split == 'train':
+                self.file_ids = self.file_ids[:int(len(self.file_ids) * 0.8)]
+            else:  # validation
+                self.file_ids = self.file_ids[int(len(self.file_ids) * 0.8):]
+                
         print(f"Loaded {len(self.file_ids)} samples for {split}")
     
     def __len__(self):
@@ -42,40 +41,43 @@ class FutureVoxDataset(Dataset):
     def __getitem__(self, idx):
         """Get a single sample from the dataset."""
         sample_id = self.file_ids[idx]
-        sample_group = self.h5_file[sample_id]
         
-        # Get mel spectrogram
-        mel_spec = sample_group['features']['mel_spectrogram'][:]
-        mel_spec = torch.from_numpy(mel_spec).float()
-        
-        # Get F0 values
-        f0_values = sample_group['features']['f0_values'][:]
-        # Replace NaN values with zeros
-        f0_values = np.nan_to_num(f0_values)
-        f0_values = torch.from_numpy(f0_values).float()
-        
-        # Get phoneme data
-        phones_bytes = sample_group['phonemes']['phones'][:]
-        phones = [p.decode('utf-8') for p in phones_bytes]
-        start_times = sample_group['phonemes']['start_times'][:]
-        end_times = sample_group['phonemes']['end_times'][:]
-        durations = sample_group['phonemes']['durations'][:]
-        
-        # Create phone indices tensor (will use a simple mapping for now)
-        # In a real implementation, you would use a proper phoneme dictionary
-        phone_set = set(phones)
-        phone_to_idx = {phone: i for i, phone in enumerate(sorted(phone_set))}
-        phone_indices = torch.tensor([phone_to_idx.get(phone, 0) for phone in phones], dtype=torch.long)
-        
-        # Create a tensor with start and end frames for each phoneme
-        start_frames = sample_group['phonemes']['start_frames'][:]
-        end_frames = sample_group['phonemes']['end_frames'][:]
-        frames = torch.tensor(np.stack([start_frames, end_frames], axis=1), dtype=torch.long)
-        
-        # Audio waveform (optional)
-        audio = sample_group['audio']['waveform'][:]
-        audio = torch.from_numpy(audio).float()
-        
+        # Open the file for each access
+        with h5py.File(self.h5_path, 'r') as h5_file:
+            sample_group = h5_file[sample_id]
+            
+            # Get mel spectrogram
+            mel_spec = sample_group['features']['mel_spectrogram'][:]
+            mel_spec = torch.from_numpy(mel_spec).float()
+            
+            # Get F0 values
+            f0_values = sample_group['features']['f0_values'][:]
+            # Replace NaN values with zeros
+            f0_values = np.nan_to_num(f0_values)
+            f0_values = torch.from_numpy(f0_values).float()
+            
+            # Get phoneme data
+            phones_bytes = sample_group['phonemes']['phones'][:]
+            phones = [p.decode('utf-8') for p in phones_bytes]
+            start_times = sample_group['phonemes']['start_times'][:]
+            end_times = sample_group['phonemes']['end_times'][:]
+            durations = sample_group['phonemes']['durations'][:]
+            
+            # Create phone indices tensor (will use a simple mapping for now)
+            # In a real implementation, you would use a proper phoneme dictionary
+            phone_set = set(phones)
+            phone_to_idx = {phone: i for i, phone in enumerate(sorted(phone_set))}
+            phone_indices = torch.tensor([phone_to_idx.get(phone, 0) for phone in phones], dtype=torch.long)
+            
+            # Create a tensor with start and end frames for each phoneme
+            start_frames = sample_group['phonemes']['start_frames'][:]
+            end_frames = sample_group['phonemes']['end_frames'][:]
+            frames = torch.tensor(np.stack([start_frames, end_frames], axis=1), dtype=torch.long)
+            
+            # Audio waveform (optional)
+            audio = sample_group['audio']['waveform'][:]
+            audio = torch.from_numpy(audio).float()
+            
         # Return everything in a dictionary
         return {
             'sample_id': sample_id,

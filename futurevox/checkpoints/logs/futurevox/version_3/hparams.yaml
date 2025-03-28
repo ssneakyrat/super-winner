@@ -1,0 +1,19 @@
+config:
+  datasets:
+    data_raw: datasets/gin
+    data_set: datasets/gin/binary/gin.h5
+  audio:
+    sample_rate: 22050
+    n_fft: 1024
+    hop_length: 256
+    n_mels: 80
+    fmin: 50
+    fmax: 1000
+  training:
+    max_epochs: 5
+    batch_size: 16
+    num_workers: 4
+    learning_rate: '1e-4'
+    hidden_dim: 256
+    checkpoint_dir: checkpoints
+num_phonemes: 100
