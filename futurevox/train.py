@@ -17,32 +17,34 @@ def load_config(config_path="config/default.yaml"):
 
 
 def main():
-    # Parse command line arguments
+    # Parse command line arguments - keeping only the config path
     parser = argparse.ArgumentParser(description="Train FutureVox model")
     parser.add_argument("--config", type=str, default="config/default.yaml", help="Path to config file")
-    parser.add_argument("--data_dir", type=str, help="Path to data directory (overrides config)")
-    parser.add_argument("--max_epochs", type=int, default=100, help="Maximum number of epochs")
-    parser.add_argument("--batch_size", type=int, default=16, help="Batch size")
-    parser.add_argument("--num_workers", type=int, default=4, help="Number of workers for data loading")
-    parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate")
-    parser.add_argument("--hidden_dim", type=int, default=256, help="Hidden dimension size")
-    parser.add_argument("--checkpoint_dir", type=str, default="checkpoints", help="Directory to save checkpoints")
     args = parser.parse_args()
     
     # Load config
     config = load_config(args.config)
     
-    # Override config with command line arguments if provided
-    data_dir = args.data_dir if args.data_dir else config['datasets']['data_raw']
+    # Get training parameters from config
+    training_config = config.get('training', {})
+    max_epochs = training_config.get('max_epochs', 100)
+    batch_size = training_config.get('batch_size', 16)
+    num_workers = training_config.get('num_workers', 4)
+    learning_rate = training_config.get('learning_rate', 1e-4)
+    hidden_dim = training_config.get('hidden_dim', 256)
+    checkpoint_dir = training_config.get('checkpoint_dir', 'checkpoints')
+    
+    # Get data directory from config
+    data_dir = config['datasets']['data_raw']
     
     # Create checkpoint directory if it doesn't exist
-    os.makedirs(args.checkpoint_dir, exist_ok=True)
+    os.makedirs(checkpoint_dir, exist_ok=True)
     
     # Set up loggers and callbacks
     logger = TensorBoardLogger(save_dir="logs", name="futurevox")
     
     checkpoint_callback = ModelCheckpoint(
-        dirpath=args.checkpoint_dir,
+        dirpath=checkpoint_dir,
         filename="futurevox-{epoch:02d}-{val_loss:.4f}",
         save_top_k=3,
         monitor="val_loss",
@@ -58,20 +60,20 @@ def main():
     # Create data module
     data_module = FutureVoxDataModule(
         data_dir=data_dir,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers
+        batch_size=batch_size,
+        num_workers=num_workers
     )
     
     # Create model
     model = FutureVoxBaseModel(
         n_mels=config['audio']['n_mels'],
-        hidden_dim=args.hidden_dim,
-        learning_rate=args.learning_rate
+        hidden_dim=hidden_dim,
+        learning_rate=learning_rate
     )
     
     # Create trainer
     trainer = pl.Trainer(
-        max_epochs=args.max_epochs,
+        max_epochs=max_epochs,
         callbacks=[checkpoint_callback, early_stop_callback],
         logger=logger,
         log_every_n_steps=10,
