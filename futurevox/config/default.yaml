@@ -1,6 +1,6 @@
 # Datasets
 datasets:
-  data_raw: "datasets"
+  data_raw: "datasets/gin"
 
 # Training configuration
 training:
