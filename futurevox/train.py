@@ -34,6 +34,12 @@ def main():
     hidden_dim = training_config.get('hidden_dim', 256)
     checkpoint_dir = training_config.get('checkpoint_dir', 'checkpoints')
     
+    # Get audio configuration
+    audio_config = config.get('audio', {})
+    sample_rate = audio_config.get('sample_rate', 22050)
+    hop_length = audio_config.get('hop_length', 256)
+    n_mels = audio_config.get('n_mels', 80)
+    
     # Get data directory from config
     data_dir = config['datasets']['data_raw']
     
@@ -64,11 +70,17 @@ def main():
         num_workers=num_workers
     )
     
-    # Create model
+    # Set up the datamodule to get the h5_file_path
+    data_module.setup()
+    
+    # Create model with the h5_file_path for visualization
     model = FutureVoxBaseModel(
-        n_mels=config['audio']['n_mels'],
+        n_mels=n_mels,
         hidden_dim=hidden_dim,
-        learning_rate=learning_rate
+        learning_rate=learning_rate,
+        h5_file_path=data_module.h5_file_path,
+        hop_length=hop_length,
+        sample_rate=sample_rate
     )
     
     # Create trainer

@@ -51,6 +51,7 @@ class FutureVoxDataset(Dataset):
             # Create sample dict
             sample = {
                 'mel_spectrogram': mel_spec_tensor,
+                'sample_idx': idx,  # Include the sample index for reference
             }
             
             if f0 is not None:
