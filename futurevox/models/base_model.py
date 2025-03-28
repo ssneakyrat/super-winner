@@ -120,31 +120,35 @@ class FutureVoxBaseModel(pl.LightningModule):
     
     def validation_step(self, batch, batch_idx):
         """
-        Validation step with TensorBoard logging for ground truth visualization.
+        Validation step with selective logging - only logs sample data.
         
         Args:
             batch: Batch of data from the dataloader
             batch_idx: Index of the batch
         """
-        # Get mel spectrogram and mask
-        mel_spec = batch['mel_spectrogram']
-        masks = batch['masks']
+        # Skip loss calculation and logging
         
-        # Forward pass
-        output = self(mel_spec)
-        
-        # Calculate masked reconstruction loss
-        mse = F.mse_loss(output, mel_spec, reduction='none')
-        mse = mse.sum(dim=1)
-        masked_mse = mse * masks.float()
-        loss = masked_mse.sum() / masks.float().sum()
-        
-        # Log loss
-        self.log('val_loss', loss, prog_bar=True)
-        
-        # Log visualizations (only for the first batch to avoid excessive logging)
+        # Only log sample data for the first batch to avoid excessive logging
         if batch_idx == 0 and hasattr(self, 'h5_file_path') and self.h5_file_path is not None:
-            self._log_visualizations(batch)
+            # Get data from batch
+            mel_spec = batch['mel_spectrogram']
+            sample_indices = batch['sample_idx']
+            lengths = batch['lengths']
+            
+            # Log for a limited number of samples
+            max_samples = min(4, len(sample_indices))
+            
+            for i in range(max_samples):
+                # Get sample index
+                sample_idx = sample_indices[i].item()
+                length = lengths[i].item()
+                
+                # Get non-padded mel spectrogram
+                actual_mel = mel_spec[i, :, :length]
+                
+                # Log only sample data (F0, phonemes, durations, and combined visualization)
+                self._log_sample_data(sample_idx, actual_mel)
+
     
     def configure_optimizers(self):
         """
@@ -242,18 +246,23 @@ class FutureVoxBaseModel(pl.LightningModule):
             if 'sample_rate' in hf[sample_key]:
                 sr = hf[sample_key]['sample_rate'][()]
             
-            # Log F0 if available
+            # Get F0 and phoneme data
+            f0 = None
+            voiced_flag = None
+            phoneme_data = []
+            
+            # Get F0 if available
             if 'f0' in hf[sample_key]:
                 f0 = hf[sample_key]['f0'][()]
-                voiced_flag = None
                 if 'voiced_flag' in hf[sample_key]:
                     voiced_flag = hf[sample_key]['voiced_flag'][()]
-                self._log_f0(f0, voiced_flag, sample_idx, sr)
+                
+                # Log F0 separately
+                #self._log_f0(f0, voiced_flag, sample_idx, sr)
             
-            # Log phonemes if available
+            # Get phonemes if available
             if 'phonemes' in hf[sample_key] and 'phoneme_count' in hf[sample_key]:
                 phoneme_count = hf[sample_key]['phoneme_count'][()]
-                phoneme_data = []
                 
                 for i in range(phoneme_count):
                     phoneme_key = f'phoneme{i}'
@@ -268,13 +277,17 @@ class FutureVoxBaseModel(pl.LightningModule):
                             'end_time': phoneme['end_time'][()],
                             'label': label
                         })
-                
+                '''
                 if phoneme_data:
-                    # Log phoneme alignment
+                    # Log phoneme alignment separately
                     self._log_phonemes(phoneme_data, mel_spec.cpu().numpy(), sr, sample_idx)
                     
                     # Calculate and log durations
                     self._log_durations(phoneme_data, sr, sample_idx)
+                '''
+            # Log combined F0 and phonemes if both are available
+            if f0 is not None and phoneme_data:
+                self._log_f0_with_phonemes(f0, voiced_flag, phoneme_data, mel_spec.cpu().numpy(), sr, sample_idx)
     
     def _log_f0(self, f0, voiced_flag, sample_idx, sr):
         """Log F0 (fundamental frequency) to TensorBoard."""
@@ -353,7 +366,85 @@ class FutureVoxBaseModel(pl.LightningModule):
         # Convert figure to tensor and log to TensorBoard
         phoneme_img = self._fig_to_tensor(fig)
         self.logger.experiment.add_image(f'val/phonemes/{sample_idx}', phoneme_img, self.global_step)
-    
+
+    def _log_f0_with_phonemes(self, f0, voiced_flag, phoneme_data, mel_spec, sr, sample_idx):
+        """
+        Log combined F0 and phoneme alignment to TensorBoard.
+        
+        Args:
+            f0: Fundamental frequency array
+            voiced_flag: Boolean array indicating voiced frames
+            phoneme_data: List of dictionaries with phoneme information
+            mel_spec: Mel spectrogram tensor
+            sr: Sample rate
+            sample_idx: Index of the sample
+        """
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
+        
+        # Plot the mel spectrogram on the top subplot
+        img = librosa.display.specshow(
+            mel_spec, 
+            sr=sr, 
+            hop_length=self.hop_length, 
+            x_axis='time', 
+            y_axis='mel', 
+            ax=ax1
+        )
+        fig.colorbar(img, ax=ax1, format='%+2.0f dB')
+        
+        # Get y-axis limits for placing text
+        y_min, y_max = ax1.get_ylim()
+        
+        # Add phoneme boundaries and labels to both subplots
+        for phoneme in phoneme_data:
+            start_time = phoneme['start_time'] / sr
+            end_time = phoneme['end_time'] / sr
+            label = phoneme['label']
+            
+            # Add vertical line at boundary on both plots
+            ax1.axvline(x=start_time, color='r', linestyle='--', alpha=0.7)
+            ax2.axvline(x=start_time, color='r', linestyle='--', alpha=0.7)
+            
+            # Add label text to the top plot
+            label_x = (start_time + end_time) / 2
+            ax1.text(label_x, y_max*0.9, label, 
+                    horizontalalignment='center', 
+                    verticalalignment='center',
+                    fontsize=10, 
+                    bbox=dict(facecolor='white', alpha=0.7))
+        
+        # Add final boundary to both plots
+        if phoneme_data:
+            ax1.axvline(x=phoneme_data[-1]['end_time'] / sr, color='r', linestyle='--', alpha=0.7)
+            ax2.axvline(x=phoneme_data[-1]['end_time'] / sr, color='r', linestyle='--', alpha=0.7)
+        
+        # Plot F0 on the bottom subplot
+        # Calculate time axis for F0
+        times = np.arange(len(f0)) * self.hop_length / sr
+        
+        if voiced_flag is not None:
+            # Plot only voiced frames
+            voiced_times = times[voiced_flag]
+            voiced_f0 = f0[voiced_flag]
+            ax2.scatter(voiced_times, voiced_f0, s=10, c='b', alpha=0.8, label='F0 (voiced)')
+        else:
+            # Plot all F0 values
+            ax2.plot(times, f0, 'b-', alpha=0.7, label='F0')
+        
+        # Set labels and titles
+        ax1.set_title(f'Mel Spectrogram with Phoneme Alignment - Sample {sample_idx}')
+        ax2.set_xlabel('Time (s)')
+        ax2.set_ylabel('Frequency (Hz)')
+        ax2.set_title('Fundamental Frequency (F0)')
+        ax2.legend()
+        
+        # Adjust layout
+        plt.tight_layout()
+        
+        # Convert figure to tensor and log to TensorBoard
+        f0_phoneme_img = self._fig_to_tensor(fig)
+        self.logger.experiment.add_image(f'val/f0_with_phonemes/{sample_idx}', f0_phoneme_img, self.global_step)
+        
     def _log_durations(self, phoneme_data, sr, sample_idx):
         """Log phoneme durations to TensorBoard."""
         # Calculate durations in frames
