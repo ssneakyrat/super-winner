@@ -97,7 +97,6 @@ def main(args):
         log_every_n_steps=10,
         val_check_interval=0.25,  # Validate 4 times per epoch
         accumulate_grad_batches=args.grad_accum,
-        resume_from_checkpoint=args.resume_from
     )
     
     # Print model size information
@@ -126,7 +125,8 @@ def main(args):
     print("Starting training...")
     trainer.fit(
         model=model,
-        datamodule=data_module
+        datamodule=data_module,
+        ckpt_path=args.resume_from  # Add the checkpoint path here
     )
     
     # Get best model path
