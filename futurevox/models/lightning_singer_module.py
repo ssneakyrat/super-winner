@@ -106,6 +106,10 @@ class FutureVoxSingerLightningModule(pl.LightningModule):
             # Use total loss for other phases
             self.manual_backward(total_loss)
         
+        # Apply manual gradient clipping using PyTorch's functionality
+        grad_clip_val = self.config['training'].get('grad_clip_val', 1.0)
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=grad_clip_val)
+        
         model_optimizer.step()
         
         # Train discriminator if needed
@@ -121,6 +125,13 @@ class FutureVoxSingerLightningModule(pl.LightningModule):
             
             # Backward pass for discriminator
             self.manual_backward(disc_loss)
+            
+            # Apply gradient clipping for discriminator as well
+            # Need to get the specific parameters for the discriminator parts
+            disc_params = [p for name, p in self.model.named_parameters() 
+                        if name.startswith('vocoder.mpd') or name.startswith('vocoder.msd')]
+            torch.nn.utils.clip_grad_norm_(disc_params, max_norm=grad_clip_val)
+            
             disc_optimizer.step()
     
     def validation_step(self, batch, batch_idx):

@@ -84,7 +84,7 @@ def main(args):
         )
     ]
     
-    # Create trainer
+    # Create trainer - REMOVED gradient_clip_val to fix the error
     trainer = pl.Trainer(
         max_epochs=config['training']['max_epochs'],
         logger=logger,
@@ -92,7 +92,7 @@ def main(args):
         precision='16-mixed' if args.mixed_precision else '32',
         accelerator='gpu' if torch.cuda.is_available() else 'cpu',
         devices=args.gpus if args.gpus else 1,
-        gradient_clip_val=config['training']['grad_clip_val'],
+        # gradient_clip_val parameter removed - manual clip in the model instead
         deterministic=args.deterministic,
         log_every_n_steps=10,
         val_check_interval=0.25,  # Validate 4 times per epoch
