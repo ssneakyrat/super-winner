@@ -15,7 +15,7 @@ import numpy as np
 from tqdm import tqdm
 from typing import Dict, List, Tuple, Set
 
-from config.model_config import FutureVoxConfig
+from config.model_config import FutureVoxConfig, DataConfig
 from utils.audio import audio_to_mel, load_audio  # Add import for audio processing functions
 
 
