@@ -83,6 +83,11 @@ def parse_args():
     )
     
     parser.add_argument(
+        "--eval_every", type=int, default=None,
+        help="Run validation every N steps (overrides config)"
+    )
+    
+    parser.add_argument(
         "--no_precomputed_mels", action="store_true",
         help="Disable use of pre-computed mel spectrograms"
     )
@@ -119,6 +124,8 @@ def main():
         config.training.epochs = args.epochs
     if args.save_every is not None:
         config.training.save_every = args.save_every
+    if args.eval_every is not None:
+        config.training.eval_every = args.eval_every
     
     # Set random seed
     pl.seed_everything(config.training.seed)
@@ -198,7 +205,7 @@ def main():
         precision=config.training.precision,
         gradient_clip_val=config.training.clip_grad_norm,
         log_every_n_steps=100,
-        val_check_interval=0.25,  # Validate every 25% of training epoch
+        val_check_interval=config.training.eval_every,  # Use eval_every from config
         default_root_dir=args.output_dir,
         accelerator="gpu"  # Use 'gpu' if CUDA is available
     )
