@@ -3,3 +3,5 @@ futurevox/datasets/
 futurevox/outputs/
 *.pyc
 *.ipynb
+*.png
+*.jpg

@@ -3,9 +3,14 @@ import yaml
 import os
 import h5py
 import numpy as np
-import librosa
-import matplotlib.pyplot as plt
 
+import matplotlib
+matplotlib.use('Agg')  # Use non-GUI backend to avoid Qt dependency
+import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
+from utils.audio import extract_mel_spectrogram
+import librosa
+import librosa.display
 from pathlib import Path
 
 def load_config(config_path="config/default.yaml"):
@@ -13,24 +18,6 @@ def load_config(config_path="config/default.yaml"):
     with open(config_path, 'r') as file:
         config = yaml.safe_load(file)
     return config
-
-def extract_mel_spectrogram(wav_file, n_mels=128, n_fft=2048, hop_length=512):
-    # Load the audio file
-    y, sr = librosa.load(wav_file, sr=None)
-    
-    # Extract mel spectrogram
-    mel_spectrogram = librosa.feature.melspectrogram(
-        y=y, 
-        sr=sr, 
-        n_fft=n_fft, 
-        hop_length=hop_length, 
-        n_mels=n_mels
-    )
-    
-    # Convert to log scale (dB)
-    log_mel_spectrogram = librosa.power_to_db(mel_spectrogram, ref=np.max)
-    
-    return log_mel_spectrogram, sr
 
 def plot_mel_spectrogram(mel_spectrogram, sr, hop_length, output_file=None, title="Mel Spectrogram"):
     plt.figure(figsize=(12, 4))
@@ -66,26 +53,23 @@ def main():
     hf.create_dataset('name', data=singerName)
 
     # List all files
-    all_lab = []
-    all_mel = []
+    index_id = 0
     for root, dirs, files in os.walk(data_raw_dir + '/lab'):
         for file in files:
             file_path = os.path.join(root, file)
             file_name = os.path.splitext(file)[0]
             file_name = os.path.basename(os.path.normpath(file_name))
             wav_path = data_raw_dir + '/wav/' + file_name + '.wav'
-            all_mel.append(wav_path)
-            all_lab.append(file_path)
+            mel_spec, sr = extract_mel_spectrogram(wav_path, n_mels=config['audio']['n_mels'], n_fft=config['audio']['n_fft'], hop_length=config['audio']['hop_length'])
+            hf.create_dataset(f'lab{index_id}', data=file)
+            hf.create_dataset(f'mel{index_id}', data=mel_spec)
+            hf.create_dataset(f'sr{index_id}', data=sr)
+            index_id = index_id+1
     
-    hf.create_dataset('lab', data=all_lab)
-    hf.create_dataset('mel', data=all_mel)
+    hf.create_dataset('pair_num', data=index_id)
 
-    # Extract Mel spectrogram
-    mel_spec, sr = extract_mel_spectrogram(all_mel[0])
-    plot_mel_spectrogram(mel_spec, sr, 512, output_file='test.png' )
-
-    print(f"Found {len(all_lab)} files.")
-    return all_lab
+    #print(f"Found {len(all_lab)} files.")
+    #return all_lab
     
 
 if __name__ == "__main__":
