@@ -20,6 +20,8 @@ class FutureVoxSingerLightningModule(pl.LightningModule):
     
     def __init__(self, config, num_phonemes=100):
         super().__init__()
+        # Set automatic optimization to False for multiple optimizers
+        self.automatic_optimization = False
         self.save_hyperparameters()
         self.config = config
         
@@ -54,18 +56,13 @@ class FutureVoxSingerLightningModule(pl.LightningModule):
         """Forward pass through model."""
         return self.model(batch, phase=phase)
     
-    def training_step(self, batch, batch_idx, optimizer_idx=0):
-        """
-        Training step with progressive training support.
+    def training_step(self, batch, batch_idx):
+        """Training step with manual optimization for multiple optimizers."""
+        # Get optimizers
+        optimizers = self.optimizers()
+        model_optimizer = optimizers[0]
+        disc_optimizer = optimizers[1] if len(optimizers) > 1 else None
         
-        Args:
-            batch: Input batch from dataloader
-            batch_idx: Index of the batch
-            optimizer_idx: Index of the optimizer (0: model, 1: vocoder discriminator)
-            
-        Returns:
-            loss: Loss for backpropagation
-        """
         # Determine current training phase based on epoch
         if self.progressive_training:
             epoch = self.current_epoch
@@ -75,10 +72,10 @@ class FutureVoxSingerLightningModule(pl.LightningModule):
             elif epoch < (self.phase_epochs['phoneme_encoder'] + self.phase_epochs['variance_adaptor']):
                 phase = 'variance_adaptor'
             elif epoch < (self.phase_epochs['phoneme_encoder'] + self.phase_epochs['variance_adaptor'] + 
-                         self.phase_epochs['acoustic_decoder']):
+                        self.phase_epochs['acoustic_decoder']):
                 phase = 'acoustic_decoder'
             elif epoch < (self.phase_epochs['phoneme_encoder'] + self.phase_epochs['variance_adaptor'] + 
-                         self.phase_epochs['acoustic_decoder'] + self.phase_epochs['vocoder']):
+                        self.phase_epochs['acoustic_decoder'] + self.phase_epochs['vocoder']):
                 phase = 'vocoder'
             else:
                 phase = 'all'
@@ -86,25 +83,6 @@ class FutureVoxSingerLightningModule(pl.LightningModule):
             self.current_phase = phase
         else:
             phase = 'all'
-        
-        # For vocoder training (if discriminator optimizer is used)
-        if phase in ['vocoder', 'all'] and optimizer_idx == 1:
-            # Get model outputs for generator
-            with torch.no_grad():
-                output_dict = self.model(batch, phase=phase)
-            
-            # Train only the discriminator
-            if 'vocoder_disc_loss' in output_dict:
-                loss = output_dict['vocoder_disc_loss']
-                
-                # Log discriminator losses
-                for key, value in output_dict['vocoder_disc_loss_dict'].items():
-                    self.log(f'train/{key}', value, prog_bar=True)
-                    
-                return loss
-            else:
-                # Return dummy loss if no discriminator loss found
-                return torch.tensor(0.0, device=self.device)
         
         # Forward pass through model
         output_dict = self.model(batch, phase=phase)
@@ -114,18 +92,36 @@ class FutureVoxSingerLightningModule(pl.LightningModule):
         
         # Log losses based on current phase
         for key, value in loss_dict.items():
-            # Skip discriminator loss for generator training
-            if key == 'vocoder_disc_loss':
-                continue
-                
-            self.log(f'train/{key}', value, prog_bar=True)
+            if key != 'vocoder_disc_loss':  # Skip discriminator loss for generator training
+                self.log(f'train/{key}', value, prog_bar=True)
         
-        # Special case for vocoder generator training
-        if phase in ['vocoder', 'all'] and optimizer_idx == 0 and 'vocoder_gen_loss' in loss_dict:
-            # Extract only the generator part of the loss for optimizer_idx=0
-            return loss_dict['vocoder_gen_loss']
+        # Train generator
+        model_optimizer.zero_grad()
+        
+        if phase in ['vocoder', 'all'] and 'vocoder_gen_loss' in loss_dict:
+            # Extract only the generator part of the loss for vocoder training
+            gen_loss = loss_dict['vocoder_gen_loss']
+            self.manual_backward(gen_loss)
+        else:
+            # Use total loss for other phases
+            self.manual_backward(total_loss)
+        
+        model_optimizer.step()
+        
+        # Train discriminator if needed
+        if disc_optimizer and phase in ['vocoder', 'all'] and 'vocoder_disc_loss' in output_dict:
+            disc_optimizer.zero_grad()
             
-        return total_loss
+            # Get discriminator loss
+            disc_loss = output_dict['vocoder_disc_loss']
+            
+            # Log discriminator losses
+            for key, value in output_dict.get('vocoder_disc_loss_dict', {}).items():
+                self.log(f'train/{key}', value, prog_bar=True)
+            
+            # Backward pass for discriminator
+            self.manual_backward(disc_loss)
+            disc_optimizer.step()
     
     def validation_step(self, batch, batch_idx):
         """
