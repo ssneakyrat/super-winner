@@ -84,7 +84,7 @@ class FutureVoxBaseModel(pl.LightningModule):
     
     def training_step(self, batch, batch_idx):
         """
-        Training step.
+        Training step with masked loss for variable-length sequences.
         
         Args:
             batch: Batch of data from the dataloader
@@ -93,14 +93,25 @@ class FutureVoxBaseModel(pl.LightningModule):
         Returns:
             Loss value
         """
-        # Get mel spectrogram
+        # Get mel spectrogram and mask
         mel_spec = batch['mel_spectrogram']
+        masks = batch['masks']
         
         # Forward pass (simple autoencoder)
         output = self(mel_spec)
         
-        # Calculate reconstruction loss
-        loss = F.mse_loss(output, mel_spec)
+        # Calculate masked reconstruction loss
+        # First calculate MSE for all positions
+        mse = F.mse_loss(output, mel_spec, reduction='none')
+        
+        # Sum across mel dimension to get [batch_size, time]
+        mse = mse.sum(dim=1)
+        
+        # Apply mask to ignore padded regions
+        masked_mse = mse * masks.float()
+        
+        # Sum over time dim and divide by number of actual (non-padded) frames
+        loss = masked_mse.sum() / masks.float().sum()
         
         # Log loss
         self.log('train_loss', loss, prog_bar=True)
@@ -115,14 +126,18 @@ class FutureVoxBaseModel(pl.LightningModule):
             batch: Batch of data from the dataloader
             batch_idx: Index of the batch
         """
-        # Get mel spectrogram
+        # Get mel spectrogram and mask
         mel_spec = batch['mel_spectrogram']
+        masks = batch['masks']
         
         # Forward pass
         output = self(mel_spec)
         
-        # Calculate reconstruction loss
-        loss = F.mse_loss(output, mel_spec)
+        # Calculate masked reconstruction loss
+        mse = F.mse_loss(output, mel_spec, reduction='none')
+        mse = mse.sum(dim=1)
+        masked_mse = mse * masks.float()
+        loss = masked_mse.sum() / masks.float().sum()
         
         # Log loss
         self.log('val_loss', loss, prog_bar=True)
@@ -138,7 +153,9 @@ class FutureVoxBaseModel(pl.LightningModule):
         Returns:
             Optimizer
         """
-        optimizer = optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
+        # Explicit conversion to float to avoid string-to-float comparison errors
+        learning_rate = float(self.hparams.learning_rate)
+        optimizer = optim.Adam(self.parameters(), lr=learning_rate)
         return optimizer
     
     def _fig_to_tensor(self, fig):
@@ -159,6 +176,7 @@ class FutureVoxBaseModel(pl.LightningModule):
     def _log_visualizations(self, batch):
         """
         Log ground truth visualizations to TensorBoard.
+        Modified to handle padded batches.
         
         Args:
             batch: Batch of data from the dataloader
@@ -166,6 +184,8 @@ class FutureVoxBaseModel(pl.LightningModule):
         # Get data from batch
         mel_spec = batch['mel_spectrogram']
         sample_indices = batch['sample_idx']
+        masks = batch['masks']
+        lengths = batch['lengths']
         
         # Log for a limited number of samples
         max_samples = min(4, len(sample_indices))
@@ -173,12 +193,16 @@ class FutureVoxBaseModel(pl.LightningModule):
         for i in range(max_samples):
             # Get sample index
             sample_idx = sample_indices[i].item()
+            length = lengths[i].item()
+            
+            # Get non-padded mel spectrogram
+            actual_mel = mel_spec[i, :, :length]
             
             # Log mel spectrogram
-            self._log_mel_spectrogram(mel_spec[i], sample_idx)
+            self._log_mel_spectrogram(actual_mel, sample_idx)
             
             # Log F0, phonemes, and durations from the H5 file
-            self._log_sample_data(sample_idx, mel_spec[i])
+            self._log_sample_data(sample_idx, actual_mel)
     
     def _log_mel_spectrogram(self, mel_spec, sample_idx):
         """Log mel spectrogram to TensorBoard."""

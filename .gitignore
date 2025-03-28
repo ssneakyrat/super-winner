@@ -2,7 +2,9 @@ futurevox/dataset_test_output/
 futurevox/datasets/
 futurevox/outputs/
 futurevox/test/
+futurevox/logs/
 *.pyc
 *.ipynb
 *.png
 *.jpg
+*.ckpt

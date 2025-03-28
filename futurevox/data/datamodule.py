@@ -60,6 +60,64 @@ class FutureVoxDataset(Dataset):
             return sample
 
 
+def collate_variable_length_sequences(batch):
+    """
+    Custom collate function for batching variable-length sequences.
+    
+    This function does the following:
+    1. Finds the longest mel spectrogram in the batch
+    2. Pads all other spectrograms to the same length
+    3. Creates a batch with uniform-sized tensors
+    4. Adds a mask to indicate which parts are padded
+    
+    Args:
+        batch: List of dictionaries containing 'mel_spectrogram' and other features
+        
+    Returns:
+        Dictionary with batched and padded tensors
+    """
+    # Extract all spectrograms and keys
+    all_specs = [sample['mel_spectrogram'] for sample in batch]
+    batch_size = len(all_specs)
+    
+    # Find max length
+    n_mels = all_specs[0].shape[0]  # Number of mel bands should be the same for all
+    max_length = max(spec.shape[1] for spec in all_specs)
+    
+    # Create padded tensor
+    padded_specs = torch.zeros(batch_size, n_mels, max_length, dtype=all_specs[0].dtype)
+    
+    # Create a mask tensor (1 for actual data, 0 for padding)
+    lengths = torch.zeros(batch_size, dtype=torch.long)
+    masks = torch.zeros(batch_size, max_length, dtype=torch.bool)
+    
+    # Fill in the data
+    for i, spec in enumerate(all_specs):
+        spec_length = spec.shape[1]
+        padded_specs[i, :, :spec_length] = spec
+        lengths[i] = spec_length
+        masks[i, :spec_length] = 1
+    
+    # Create the batch with padded values
+    result = {
+        'mel_spectrogram': padded_specs,
+        'lengths': lengths,  # Store original lengths
+        'masks': masks,      # Store masks for attention/loss calculations
+        'sample_idx': torch.tensor([sample['sample_idx'] for sample in batch]),
+    }
+    
+    # Add other features if they exist and can be batched
+    if 'f0' in batch[0] and batch[0]['f0'] is not None:
+        all_f0 = [sample['f0'] for sample in batch]
+        padded_f0 = torch.zeros(batch_size, max_length, dtype=all_f0[0].dtype)
+        for i, f0 in enumerate(all_f0):
+            f0_length = min(f0.shape[0], max_length)  # Ensure f0 doesn't exceed max_length
+            padded_f0[i, :f0_length] = f0[:f0_length]
+        result['f0'] = padded_f0
+    
+    return result
+
+
 class FutureVoxDataModule(pl.LightningDataModule):
     """PyTorch Lightning DataModule for FutureVox."""
     
@@ -115,21 +173,23 @@ class FutureVoxDataModule(pl.LightningDataModule):
             )
     
     def train_dataloader(self):
-        """Return the training dataloader."""
+        """Return the training dataloader with custom collate function."""
         return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
-            pin_memory=True
+            pin_memory=True,
+            collate_fn=collate_variable_length_sequences  # Use custom collate function
         )
     
     def val_dataloader(self):
-        """Return the validation dataloader."""
+        """Return the validation dataloader with custom collate function."""
         return DataLoader(
             self.val_dataset,
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            pin_memory=True
+            pin_memory=True,
+            collate_fn=collate_variable_length_sequences  # Use custom collate function
         )
