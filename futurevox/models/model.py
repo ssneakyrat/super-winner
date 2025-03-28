@@ -45,7 +45,7 @@ class FutureVoxSinger(nn.Module):
         Args:
             batch: Dictionary containing input tensors
             phase: Training phase ('phoneme_encoder', 'variance_adaptor', 
-                                 'acoustic_decoder', 'vocoder', or 'all')
+                                'acoustic_decoder', 'vocoder', or 'all')
             
         Returns:
             output_dict: Dictionary containing model outputs
@@ -73,15 +73,6 @@ class FutureVoxSinger(nn.Module):
                 'waveform': waveform
             }
         
-        # Get expected training phase based on available inputs
-        if phase == 'auto':
-            if mel_spectrograms is not None and waveform is not None:
-                phase = 'all'
-            elif mel_spectrograms is not None:
-                phase = 'acoustic_decoder'
-            else:
-                phase = 'phoneme_encoder'
-        
         # 1. Phoneme Encoder
         if phase in ['phoneme_encoder', 'variance_adaptor', 'acoustic_decoder', 'vocoder', 'all']:
             encoded_phonemes, attn_weights = self.phoneme_encoder(
@@ -90,7 +81,11 @@ class FutureVoxSinger(nn.Module):
             output_dict['encoded_phonemes'] = encoded_phonemes
             output_dict['phoneme_attention_weights'] = attn_weights
         
-        # 2. Variance Adaptor
+        # Exit if we're only training the phoneme encoder
+        if phase == 'phoneme_encoder':
+            return output_dict
+        
+        # 2. Variance Adaptor (only run if not in phoneme_encoder phase)
         if phase in ['variance_adaptor', 'acoustic_decoder', 'vocoder', 'all']:
             variance_outputs = self.variance_adaptor(
                 encoded_phonemes, phone_masks, note_indices, rhythm_info,
@@ -98,44 +93,9 @@ class FutureVoxSinger(nn.Module):
             )
             output_dict.update(variance_outputs)
         
-        # 3. Acoustic Decoder
-        if phase in ['acoustic_decoder', 'vocoder', 'all']:
-            acoustic_outputs = self.acoustic_decoder(
-                variance_outputs['expanded_features'],
-                variance_outputs['mel_masks'],
-                ref_mels=mel_spectrograms,
-                f0=variance_outputs['f0_contour'],
-                energy=variance_outputs['energy']
-            )
-            output_dict.update(acoustic_outputs)
-        
-        # 4. Vocoder
-        if phase in ['vocoder', 'all'] and (self.training and self.train_vocoder or not self.training):
-            # Use generated mel spectrograms for vocoder input
-            vocoder_input = acoustic_outputs['mel_postnet']
-            
-            # Generate waveform
-            waveform_pred = self.vocoder(
-                vocoder_input,
-                f0=variance_outputs.get('f0_contour', None)
-            )
-            output_dict['waveform_pred'] = waveform_pred
-            
-            # If in training, calculate vocoder losses
-            if self.training and self.train_vocoder and waveform is not None:
-                gen_loss, gen_loss_dict = self.vocoder.calculate_generator_loss(
-                    waveform_pred, waveform, mel_spectrograms
-                )
-                output_dict['vocoder_gen_loss'] = gen_loss
-                output_dict['vocoder_gen_loss_dict'] = gen_loss_dict
-                
-                disc_loss, disc_loss_dict = self.vocoder.calculate_discriminator_loss(
-                    waveform_pred, waveform
-                )
-                output_dict['vocoder_disc_loss'] = disc_loss
-                output_dict['vocoder_disc_loss_dict'] = disc_loss_dict
-        
-        return output_dict
+        # Exit if we're only training up to variance adaptor
+        if phase == 'variance_adaptor':
+            return output_dict
     
     def inference(self, phone_indices, note_indices=None, rhythm_info=None, 
                  singer_id=None, tempo_factor=1.0, ref_mel=None):

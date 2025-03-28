@@ -20,7 +20,6 @@ class FutureVoxSingerLightningModule(pl.LightningModule):
     
     def __init__(self, config, num_phonemes=100):
         super().__init__()
-        # Set automatic optimization to False for multiple optimizers
         self.automatic_optimization = False
         self.save_hyperparameters()
         self.config = config
@@ -38,7 +37,7 @@ class FutureVoxSingerLightningModule(pl.LightningModule):
         self.progressive_training = config.get('training', {}).get('progressive', True)
         
         # Track current training phase
-        self.current_phase = 'phoneme_encoder'
+        self.current_phase = 'phoneme_encoder'  # Start with phoneme encoder
         
         # For progressive training
         self.phase_epochs = config.get('training', {}).get('phase_epochs', {
@@ -48,21 +47,12 @@ class FutureVoxSingerLightningModule(pl.LightningModule):
             'vocoder': 10,
             'all': 50
         })
-        
-        # Store sample rate for audio conversion
-        self.sample_rate = config['audio']['sample_rate']
     
     def forward(self, batch, phase='all'):
         """Forward pass through model."""
         return self.model(batch, phase=phase)
     
     def training_step(self, batch, batch_idx):
-        """Training step with manual optimization for multiple optimizers."""
-        # Get optimizers
-        optimizers = self.optimizers()
-        model_optimizer = optimizers[0]
-        disc_optimizer = optimizers[1] if len(optimizers) > 1 else None
-        
         # Determine current training phase based on epoch
         if self.progressive_training:
             epoch = self.current_epoch
@@ -80,80 +70,39 @@ class FutureVoxSingerLightningModule(pl.LightningModule):
             else:
                 phase = 'all'
                 
-            self.current_phase = phase
+            # Only update phase if it's changing
+            if phase != self.current_phase:
+                print(f"Transitioning from {self.current_phase} to {phase} phase")
+                self.current_phase = phase
         else:
             phase = 'all'
         
-        # Forward pass through model
+        # Forward pass with the appropriate phase
         output_dict = self.model(batch, phase=phase)
         
         # Calculate losses
         loss_dict, total_loss = self.model.calculate_losses(output_dict, batch)
         
-        # Check if total_loss is a tensor that can be backpropagated
-        if not isinstance(total_loss, torch.Tensor) or not total_loss.requires_grad:
-            # Create a dummy tensor with gradient if needed
-            device = next(self.parameters()).device
-            total_loss = torch.tensor(0.0, device=device, requires_grad=True)
-            # Log this situation for debugging
-            print(f"Warning: Created dummy loss tensor in training_step (phase: {phase})")
+        # Get optimizers
+        opt = self.optimizers()
         
-        # Log losses based on current phase
+        # Zero gradients and backward pass
+        opt.zero_grad()
+        self.manual_backward(total_loss)
+        
+        # Apply gradient clipping
+        gradient_clip_val = self.config['training'].get('grad_clip_val', 1.0)
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=gradient_clip_val)
+        
+        # Step optimizer
+        opt.step()
+        
+        # Log losses
         for key, value in loss_dict.items():
-            if key != 'vocoder_disc_loss':  # Skip discriminator loss for generator training
-                if isinstance(value, torch.Tensor):
-                    self.log(f'train/{key}', value.item(), prog_bar=True)
-                elif isinstance(value, (int, float)):
-                    self.log(f'train/{key}', value, prog_bar=True)
-        
-        # Train generator
-        model_optimizer.zero_grad()
-        
-        if phase in ['vocoder', 'all'] and 'vocoder_gen_loss' in loss_dict:
-            # Extract only the generator part of the loss for vocoder training
-            gen_loss = loss_dict['vocoder_gen_loss']
-            if isinstance(gen_loss, torch.Tensor) and gen_loss.requires_grad:
-                self.manual_backward(gen_loss)
+            if isinstance(value, torch.Tensor):
+                self.log(f'train/{key}', value.item(), prog_bar=True)
             else:
-                self.manual_backward(total_loss)
-        else:
-            # Use total loss for other phases
-            self.manual_backward(total_loss)
-        
-        # Apply manual gradient clipping using PyTorch's functionality
-        grad_clip_val = self.config['training'].get('grad_clip_val', 1.0)
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=grad_clip_val)
-        
-        model_optimizer.step()
-        
-        # Train discriminator if needed
-        if disc_optimizer and phase in ['vocoder', 'all'] and 'vocoder_disc_loss' in output_dict:
-            disc_optimizer.zero_grad()
-            
-            # Get discriminator loss
-            disc_loss = output_dict['vocoder_disc_loss']
-            
-            # Log discriminator losses
-            for key, value in output_dict.get('vocoder_disc_loss_dict', {}).items():
-                if isinstance(value, torch.Tensor):
-                    self.log(f'train/{key}', value.item(), prog_bar=True)
-                elif isinstance(value, (int, float)):
-                    self.log(f'train/{key}', value, prog_bar=True)
-            
-            # Ensure disc_loss is a tensor that can be backpropagated
-            if isinstance(disc_loss, torch.Tensor) and disc_loss.requires_grad:
-                # Backward pass for discriminator
-                self.manual_backward(disc_loss)
-                
-                # Apply gradient clipping for discriminator as well
-                # Need to get the specific parameters for the discriminator parts
-                disc_params = [p for name, p in self.model.named_parameters() 
-                            if name.startswith('vocoder.mpd') or name.startswith('vocoder.msd')]
-                torch.nn.utils.clip_grad_norm_(disc_params, max_norm=grad_clip_val)
-                
-                disc_optimizer.step()
-            else:
-                print(f"Warning: Discriminator loss is not a valid tensor in training_step (phase: {phase})")
+                self.log(f'train/{key}', value, prog_bar=True)
         
         return total_loss
     

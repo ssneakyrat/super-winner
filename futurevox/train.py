@@ -165,6 +165,10 @@ if __name__ == '__main__':
                         help='Early stopping patience')
     parser.add_argument('--resume_from', type=str, default=None,
                         help='Resume training from checkpoint')
+    parser.add_argument("--phase", type=str, default="progressive",
+                    choices=["phoneme_encoder", "variance_adaptor", "acoustic_decoder", 
+                             "vocoder", "all", "progressive"],
+                    help="Training phase for progressive training")
     args = parser.parse_args()
     
     # Print PyTorch and CUDA information
