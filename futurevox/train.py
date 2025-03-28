@@ -35,10 +35,10 @@ def main(args):
     config_copy_path = os.path.join(checkpoint_dir, "config.yaml")
     shutil.copy(args.config, config_copy_path)
     
-    # Set up logger
+    # Set up logger - Modified to store logs directly in the checkpoint directory
     logger = TensorBoardLogger(
-        save_dir=os.path.join(checkpoint_dir, 'logs'),
-        name='futurevox_singer'
+        save_dir=os.path.join( 'checkpoints/logs'),
+        name=''  # Empty name to avoid creating a subdirectory
     )
     
     # Setup data module
