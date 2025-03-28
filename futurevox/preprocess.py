@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import librosa
 import librosa.display
 from pathlib import Path
-from utils.audio import extract_mel_spectrogram
+from utils.audio import extract_mel_spectrogram, extract_f0
 
 def load_config(config_path="config/default.yaml"):
     """Load configuration from YAML file."""
@@ -88,6 +88,22 @@ def main():
                 hop_length=config['audio']['hop_length']
             )
             
+            # Extract F0
+            f0, voiced_flag, _ = extract_f0(
+                wav_path,
+                hop_length=config['audio']['hop_length'],
+                fmin=50,  # Typical range for singing voice
+                fmax=1000
+            )
+            
+            # Check alignment of mel spectrogram and F0
+            if len(f0) != mel_spec.shape[1]:
+                print(f"Warning: F0 frames ({len(f0)}) don't match mel spectrogram frames ({mel_spec.shape[1]}) for {file_name}")
+                min_frames = min(len(f0), mel_spec.shape[1])
+                f0 = f0[:min_frames]
+                voiced_flag = voiced_flag[:min_frames]
+                mel_spec = mel_spec[:, :min_frames]
+            
             # Read phoneme labels from lab file
             phoneme_data = read_lab_file(file_path)
             
@@ -101,6 +117,10 @@ def main():
             # Store mel spectrogram
             sample_group.create_dataset('mel_spectrogram', data=mel_spec)
             sample_group.create_dataset('sample_rate', data=sr)
+            
+            # Store F0 data
+            sample_group.create_dataset('f0', data=f0)
+            sample_group.create_dataset('voiced_flag', data=voiced_flag)
             
             # Store phoneme data
             phoneme_group = sample_group.create_group('phonemes')

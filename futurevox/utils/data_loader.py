@@ -5,6 +5,8 @@ import pandas as pd
 import matplotlib
 matplotlib.use('Agg')  # Use non-GUI backend to avoid Qt dependency
 import matplotlib.pyplot as plt
+import librosa
+import librosa.display
 
 def load_sample_from_h5(h5_file_path, sample_index):
     """
@@ -20,6 +22,8 @@ def load_sample_from_h5(h5_file_path, sample_index):
         - mel_spectrogram: The mel spectrogram array
         - sample_rate: Audio sample rate
         - phonemes: DataFrame of phoneme timings and labels
+        - f0: Fundamental frequency (if available)
+        - voiced_flag: Boolean array indicating voiced frames (if available)
     """
     with h5py.File(h5_file_path, 'r') as hf:
         # Check if the sample exists
@@ -38,6 +42,14 @@ def load_sample_from_h5(h5_file_path, sample_index):
         # Extract mel spectrogram and sample rate
         mel_spec = sample['mel_spectrogram'][()]
         sr = sample['sample_rate'][()]
+        
+        # Extract F0 data if available
+        f0 = None
+        voiced_flag = None
+        if 'f0' in sample:
+            f0 = sample['f0'][()]
+            if 'voiced_flag' in sample:
+                voiced_flag = sample['voiced_flag'][()]
         
         # Extract phoneme data
         phoneme_data = []
@@ -64,7 +76,9 @@ def load_sample_from_h5(h5_file_path, sample_index):
             'file_name': file_name,
             'mel_spectrogram': mel_spec,
             'sample_rate': sr,
-            'phonemes': phonemes_df
+            'phonemes': phonemes_df,
+            'f0': f0,
+            'voiced_flag': voiced_flag
         }
 
 def list_samples_in_h5(h5_file_path):
@@ -93,10 +107,14 @@ def list_samples_in_h5(h5_file_path):
             # Get phoneme count
             phoneme_count = hf[sample_key]['phoneme_count'][()]
             
+            # Check if F0 is available
+            has_f0 = 'f0' in hf[sample_key]
+            
             samples.append({
                 'index': i,
                 'file_name': file_name,
-                'phoneme_count': phoneme_count
+                'phoneme_count': phoneme_count,
+                'has_f0': has_f0
             })
     
     return pd.DataFrame(samples)
@@ -113,7 +131,7 @@ def extract_aligned_features(h5_file_path, sample_index, feature_type='mel_frame
             
     Returns:
         Depends on feature_type:
-        - For 'mel_frame_to_phoneme': (mel_spec, phoneme_indices)
+        - For 'mel_frame_to_phoneme': (mel_spec, phoneme_indices, phonemes, f0)
             where phoneme_indices maps each frame to the corresponding phoneme index
     """
     # Load the sample
@@ -121,6 +139,7 @@ def extract_aligned_features(h5_file_path, sample_index, feature_type='mel_frame
     mel_spec = sample['mel_spectrogram']
     sr = sample['sample_rate']
     phonemes = sample['phonemes']
+    f0 = sample['f0']
     
     if feature_type == 'mel_frame_to_phoneme':
         # Get hop length from config or use default
@@ -141,40 +160,46 @@ def extract_aligned_features(h5_file_path, sample_index, feature_type='mel_frame
             mask = (frame_times >= start_sec) & (frame_times < end_sec)
             phoneme_indices[mask] = i
         
-        return mel_spec, phoneme_indices, phonemes
+        return mel_spec, phoneme_indices, phonemes, f0
     
     else:
         raise ValueError(f"Unknown feature type: {feature_type}")
 
-def visualize_sample_from_h5(h5_file_path, sample_index):
+def visualize_sample_from_h5(h5_file_path, sample_index, include_f0=True):
     """
-    Visualize a sample from the HDF5 file, showing mel spectrogram and phoneme boundaries.
-    """
-    # Load the aligned features
-    mel_spec, phoneme_indices, phonemes_df = extract_aligned_features(
-        h5_file_path, sample_index, feature_type='mel_frame_to_phoneme'
-    )
+    Visualize a sample from the HDF5 file, showing mel spectrogram, phoneme boundaries, and optionally F0.
     
-    # Also get the raw sample data for additional information
+    Args:
+        h5_file_path: Path to the HDF5 file
+        sample_index: Index of the sample to visualize
+        include_f0: Whether to include F0 visualization (if available)
+    """
+    # Load the sample
     sample = load_sample_from_h5(h5_file_path, sample_index)
+    mel_spec = sample['mel_spectrogram']
     sr = sample['sample_rate']
+    phonemes_df = sample['phonemes']
     
-    # Create the visualization
-    plt.figure(figsize=(20, 10))
+    # Check if F0 is available and should be included
+    has_f0 = sample['f0'] is not None and include_f0
+    
+    # Set up the plot
+    if has_f0:
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(20, 10), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
+    else:
+        fig, ax1 = plt.subplots(figsize=(20, 6))
     
     # Plot the mel spectrogram
-    librosa.display.specshow(
+    img = librosa.display.specshow(
         mel_spec, 
         sr=sr, 
         hop_length=256,  # Should match your extraction settings
         x_axis='time', 
-        y_axis='mel'
+        y_axis='mel',
+        ax=ax1
     )
-    plt.colorbar(format='%+2.0f dB')
-    
-    # Get axis limits
-    ax = plt.gca()
-    y_min, y_max = ax.get_ylim()
+    fig.colorbar(img, ax=ax1, format='%+2.0f dB')
+    ax1.set_title(f"Mel Spectrogram: {sample['file_name']}")
     
     # Add phoneme boundaries and labels
     for i, phoneme in phonemes_df.iterrows():
@@ -183,19 +208,52 @@ def visualize_sample_from_h5(h5_file_path, sample_index):
         end_sec = phoneme['end_time'] / sr
         
         # Add vertical line at boundary
-        plt.axvline(x=start_sec, color='r', linestyle='--', alpha=0.7)
+        ax1.axvline(x=start_sec, color='r', linestyle='--', alpha=0.7)
+        if has_f0:
+            ax2.axvline(x=start_sec, color='r', linestyle='--', alpha=0.7)
         
         # Add label text
         label_x = (start_sec + end_sec) / 2
-        plt.text(label_x, y_max*0.9, phoneme['label'], 
+        y_min, y_max = ax1.get_ylim()
+        ax1.text(label_x, y_max*0.9, phoneme['label'], 
                  horizontalalignment='center', 
                  verticalalignment='center',
                  fontsize=10, 
                  bbox=dict(facecolor='white', alpha=0.7))
     
     # Add final boundary
-    plt.axvline(x=phonemes_df.iloc[-1]['end_time'] / sr, color='r', linestyle='--', alpha=0.7)
+    final_time = phonemes_df.iloc[-1]['end_time'] / sr
+    ax1.axvline(x=final_time, color='r', linestyle='--', alpha=0.7)
+    if has_f0:
+        ax2.axvline(x=final_time, color='r', linestyle='--', alpha=0.7)
     
-    plt.title(f"Sample: {sample['file_name']}")
+    # Plot F0 if available
+    if has_f0:
+        f0 = sample['f0']
+        voiced_flag = sample['voiced_flag']
+        
+        # Calculate time axis for F0
+        hop_length = 256  # Should match your extraction settings
+        f0_times = np.arange(len(f0)) * hop_length / sr
+        
+        # Plot F0 (different display for voiced/unvoiced)
+        if voiced_flag is not None:
+            # Plot only the voiced parts
+            voiced_times = f0_times[voiced_flag]
+            voiced_f0 = f0[voiced_flag]
+            ax2.scatter(voiced_times, voiced_f0, s=5, c='b', alpha=0.7, label='F0 (voiced)')
+        else:
+            # Plot all F0 values
+            ax2.plot(f0_times, f0, 'b-', alpha=0.7, label='F0')
+        
+        ax2.set_ylabel('Frequency (Hz)')
+        ax2.set_xlabel('Time (s)')
+        ax2.set_title('Fundamental Frequency (F0)')
+        ax2.legend()
+    else:
+        ax1.set_xlabel('Time (s)')
+    
     plt.tight_layout()
     plt.show()
+    
+    return fig
