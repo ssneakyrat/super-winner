@@ -119,6 +119,7 @@ class TrainingConfig:
     eval_every: int = 1000
     precision: int = 16  # For mixed precision training
     clip_grad_norm: float = 1.0
+    num_workers: int = 0  # Number of dataloader workers (0 = single-process)
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     loss_weights: LossWeightsConfig = field(default_factory=LossWeightsConfig)

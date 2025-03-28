@@ -93,7 +93,7 @@ class TextEncoder(nn.Module):
 
 class DurationPredictor(nn.Module):
     """
-    Duration predictor module.
+    Enhanced duration predictor module with more capacity.
     Predicts phoneme durations in log domain.
     """
     
@@ -109,39 +109,37 @@ class DurationPredictor(nn.Module):
         
         self.conv_layers = nn.ModuleList()
         self.kernel_size = config.kernel_size
+        hidden_dim = input_dim  # Can be increased for more capacity
         
-        # Initial layer
-        self.conv_layers.append(
-            nn.Sequential(
-                nn.Conv1d(
-                    input_dim, input_dim,
-                    kernel_size=config.kernel_size,
-                    padding=(config.kernel_size - 1) // 2
-                ),
-                nn.ReLU(),
-                # Use GroupNorm instead of LayerNorm for Conv1D outputs
-                nn.GroupNorm(1, input_dim),  # 1 group = InstanceNorm behavior
-                nn.Dropout(config.dropout)
+        # Initial projection
+        self.pre_proj = nn.Linear(input_dim, hidden_dim)
+        
+        # Convolution blocks - increased from 2 to 3 layers
+        for _ in range(3):
+            self.conv_layers.append(
+                nn.Sequential(
+                    nn.Conv1d(
+                        hidden_dim, hidden_dim,
+                        kernel_size=config.kernel_size,
+                        padding=(config.kernel_size - 1) // 2
+                    ),
+                    nn.ReLU(),
+                    # Use GroupNorm instead of LayerNorm for Conv1D outputs
+                    nn.GroupNorm(8, hidden_dim),  # 8 groups for better stability
+                    nn.Dropout(config.dropout)
+                )
             )
-        )
         
-        # Second layer
-        self.conv_layers.append(
-            nn.Sequential(
-                nn.Conv1d(
-                    input_dim, input_dim,
-                    kernel_size=config.kernel_size,
-                    padding=(config.kernel_size - 1) // 2
-                ),
-                nn.ReLU(),
-                # Use GroupNorm instead of LayerNorm for Conv1D outputs
-                nn.GroupNorm(1, input_dim),  # 1 group = InstanceNorm behavior
-                nn.Dropout(config.dropout)
-            )
+        # Final projection with residual connection
+        self.final_conv = nn.Conv1d(
+            hidden_dim, hidden_dim,
+            kernel_size=config.kernel_size,
+            padding=(config.kernel_size - 1) // 2
         )
+        self.final_norm = nn.GroupNorm(8, hidden_dim)
         
-        # Projection to scalar output
-        self.proj = nn.Linear(input_dim, 1)
+        # Output projection to scalar
+        self.proj = nn.Linear(hidden_dim, 1)
         
     def forward(self, x):
         """
@@ -153,6 +151,9 @@ class DurationPredictor(nn.Module):
         Returns:
             Log durations [B, L, 1]
         """
+        # Initial projection
+        x = F.relu(self.pre_proj(x))
+        
         # Transpose for 1D convolution
         x_conv = x.transpose(1, 2)  # [B, H, L]
         
@@ -162,9 +163,14 @@ class DurationPredictor(nn.Module):
             padding_needed = min_length - x_conv.size(2)
             x_conv = F.pad(x_conv, (0, padding_needed))
         
-        # Apply convolution layers
+        # Apply convolution layers with residual connections
+        residual = x_conv
         for layer in self.conv_layers:
-            x_conv = layer(x_conv)
+            x_conv = layer(x_conv) + residual  # Add residual connection
+            residual = x_conv  # Update residual for next layer
+        
+        # Final convolution with residual
+        x_conv = F.relu(self.final_norm(self.final_conv(x_conv))) + residual
         
         # Transpose back
         x = x_conv.transpose(1, 2)  # [B, L, H]
@@ -173,8 +179,12 @@ class DurationPredictor(nn.Module):
         original_len = min(x.size(1), x.size(1))
         x = x[:, :original_len, :]
         
-        # Project to scalar
+        # Project to scalar - important change to avoid zero predictions
         log_durations = self.proj(x)  # [B, L, 1]
+        
+        # Add small offset to prevent extreme negative values in log space
+        # This helps ensure predicted durations won't be too close to zero
+        log_durations = log_durations + 1.0
         
         return log_durations
 

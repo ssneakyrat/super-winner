@@ -73,8 +73,8 @@ def parse_args():
     )
     
     parser.add_argument(
-        "--num_workers", type=int, default=4,
-        help="Number of data loader workers"
+        "--num_workers", type=int, default=None,
+        help="Number of data loader workers (overrides config)"
     )
     
     parser.add_argument(
@@ -126,6 +126,8 @@ def main():
         config.training.save_every = args.save_every
     if args.eval_every is not None:
         config.training.eval_every = args.eval_every
+    if args.num_workers is not None:
+        config.training.num_workers = args.num_workers
     
     # Set random seed
     pl.seed_everything(config.training.seed)
@@ -143,7 +145,7 @@ def main():
         data_dir=data_dir,
         config=config.data,
         batch_size=config.training.batch_size,
-        num_workers=args.num_workers,
+        num_workers=config.training.num_workers,  # Use the num_workers from config
         limit_dataset_size=args.limit_dataset,
         use_precomputed_mels=not args.no_precomputed_mels
     )

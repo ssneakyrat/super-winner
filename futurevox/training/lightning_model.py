@@ -226,6 +226,41 @@ class FutureVoxLightning(pl.LightningModule):
                     global_step=self.global_step
                 )
                 
+                if batch_idx == 0:
+                    n_samples = min(self.config.logging.audio_samples, phonemes.size(0))
+                    
+                    for i in range(n_samples):
+                        # Get lengths
+                        phoneme_len = phoneme_lengths[i].item()
+                        
+                        # Get ground truth and predicted durations
+                        gt_dur = durations[i, :phoneme_len].detach().cpu().numpy()
+                        pred_dur = pred_outputs["durations_pred"][i, :phoneme_len].detach().cpu().numpy()
+                        
+                        # Log statistics
+                        gt_sum = gt_dur.sum()
+                        pred_sum = pred_dur.sum()
+                        
+                        # Enhanced combined duration plot
+                        combined_fig = self._plot_combined_durations(gt_dur, pred_dur)
+                        self.logger.experiment.add_figure(
+                            f"val/duration_combined_{i}",
+                            combined_fig,
+                            global_step=self.global_step
+                        )
+                        
+                        # Print debug info
+                        if i == 0:  # Only print for first sample to avoid spam
+                            print(f"\nDuration Debug - Sample {i}:")
+                            print(f"GT Durations - Sum: {gt_sum}, Mean: {gt_dur.mean():.2f}")
+                            print(f"Pred Durations - Sum: {pred_sum}, Mean: {pred_dur.mean():.2f}")
+                            if phoneme_len <= 10:
+                                print(f"GT Durations: {gt_dur}")
+                                print(f"Pred Durations: {pred_dur}\n")
+                            else:
+                                print(f"GT Durations (first 10): {gt_dur[:10]}")
+                                print(f"Pred Durations (first 10): {pred_dur[:10]}\n")
+                                
                 # Log alignment
                 self.logger.experiment.add_figure(
                     f"val/duration_alignment_{i}",
@@ -292,7 +327,7 @@ class FutureVoxLightning(pl.LightningModule):
     
     def _plot_alignment(self, gt_duration, pred_duration):
         """
-        Plot duration alignment.
+        Plot duration alignment with improved visualization.
         
         Args:
             gt_duration: Ground truth durations
@@ -303,14 +338,96 @@ class FutureVoxLightning(pl.LightningModule):
         """
         fig, axes = plt.subplots(2, 1, figsize=(10, 6))
         
-        axes[0].bar(range(len(gt_duration)), gt_duration)
+        # Make sure we have non-empty data
+        if np.sum(gt_duration) == 0 and np.sum(pred_duration) == 0:
+            # If both are zeros, create a simple message plot
+            for ax in axes:
+                ax.text(0.5, 0.5, "No duration data available yet", 
+                    horizontalalignment='center', verticalalignment='center',
+                    transform=ax.transAxes, fontsize=14)
+                ax.set_xticks([])
+                ax.set_yticks([])
+            plt.tight_layout()
+            return fig
+        
+        # Set same y-axis limit for both plots
+        max_duration = max(np.max(gt_duration) if len(gt_duration) > 0 else 0, 
+                        np.max(pred_duration) if len(pred_duration) > 0 else 0)
+        if max_duration > 0:
+            max_duration = max_duration * 1.2  # Add 20% margin
+        else:
+            max_duration = 10  # Default if all zeros
+        
+        # Plot ground truth
+        axes[0].bar(range(len(gt_duration)), gt_duration, color='blue', alpha=0.7)
         axes[0].set_title('Ground Truth Durations')
         axes[0].set_ylabel('Frames')
+        axes[0].set_ylim(0, max_duration)
+        axes[0].grid(axis='y', linestyle='--', alpha=0.7)
         
-        axes[1].bar(range(len(pred_duration)), pred_duration)
+        # Plot predicted durations
+        axes[1].bar(range(len(pred_duration)), pred_duration, color='red', alpha=0.7)
         axes[1].set_title('Predicted Durations')
         axes[1].set_xlabel('Phoneme Index')
         axes[1].set_ylabel('Frames')
+        axes[1].set_ylim(0, max_duration)
+        axes[1].grid(axis='y', linestyle='--', alpha=0.7)
+        
+        # Add sum of frames and avg per phoneme as text
+        gt_sum = np.sum(gt_duration)
+        pred_sum = np.sum(pred_duration)
+        gt_avg = gt_sum / len(gt_duration) if len(gt_duration) > 0 else 0
+        pred_avg = pred_sum / len(pred_duration) if len(pred_duration) > 0 else 0
+        
+        axes[0].text(0.02, 0.92, f'Sum: {gt_sum:.1f} frames, Avg: {gt_avg:.1f}/phoneme', 
+                    transform=axes[0].transAxes, fontsize=9)
+        axes[1].text(0.02, 0.92, f'Sum: {pred_sum:.1f} frames, Avg: {pred_avg:.1f}/phoneme', 
+                    transform=axes[1].transAxes, fontsize=9)
+        
+        plt.tight_layout()
+        
+        return fig
+    
+    # Add this new method to FutureVoxLightning class
+    def _plot_combined_durations(self, gt_duration, pred_duration):
+        """
+        Plot ground truth and predicted durations on the same axes for direct comparison.
+        
+        Args:
+            gt_duration: Ground truth durations
+            pred_duration: Predicted durations
+            
+        Returns:
+            Matplotlib figure
+        """
+        fig, ax = plt.subplots(figsize=(12, 5))
+        
+        # Use minimal length to avoid index errors
+        min_len = min(len(gt_duration), len(pred_duration))
+        x = np.arange(min_len)
+        
+        # Set width of the bars
+        width = 0.4
+        
+        # Plot bars side by side
+        rects1 = ax.bar(x - width/2, gt_duration[:min_len], width, label='Ground Truth', alpha=0.7, color='blue')
+        rects2 = ax.bar(x + width/2, pred_duration[:min_len], width, label='Predicted', alpha=0.7, color='red')
+        
+        # Add some text for labels, title and custom x-axis tick labels
+        ax.set_xlabel('Phoneme Index')
+        ax.set_ylabel('Duration (frames)')
+        ax.set_title('Ground Truth vs Predicted Durations')
+        if min_len <= 20:  # Only show ticks for reasonable number of phonemes
+            ax.set_xticks(x)
+        ax.legend()
+        
+        # Calculate difference metrics
+        abs_diff = np.abs(gt_duration[:min_len] - pred_duration[:min_len])
+        mean_abs_error = np.mean(abs_diff)
+        
+        # Add difference information
+        ax.text(0.02, 0.92, f'Mean Absolute Error: {mean_abs_error:.2f} frames', 
+                transform=ax.transAxes, fontsize=10)
         
         plt.tight_layout()
         

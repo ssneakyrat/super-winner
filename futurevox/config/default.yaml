@@ -70,9 +70,10 @@ training:
   seed: 1234
   epochs: 10  # Reduced from 1000
   save_every: 1000  # More frequent saving
-  eval_every: 1000  # More frequent evaluation
+  eval_every: 24  # More frequent evaluation
   precision: 16  # Mixed precision training
   clip_grad_norm: 1.0
+  num_workers: 4  # Single-process data loading to avoid pickling issues
   
   # Optimizer (same as default)
   optimizer:

@@ -458,7 +458,8 @@ class LightSingerDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             pin_memory=True,
             drop_last=True,
-            collate_fn=self._collate_fn
+            collate_fn=self._collate_fn,
+            persistent_workers=False,
         )
     
     def val_dataloader(self):
@@ -470,7 +471,8 @@ class LightSingerDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             pin_memory=True,
             drop_last=False,
-            collate_fn=self._collate_fn
+            collate_fn=self._collate_fn,
+            persistent_workers=False,
         )
     
     def test_dataloader(self):

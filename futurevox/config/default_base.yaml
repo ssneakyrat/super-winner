@@ -73,6 +73,7 @@ training:
   eval_every: 1000
   precision: 16  # For mixed precision training
   clip_grad_norm: 1.0
+  num_workers: 2  # Standard setting - can be increased for faster systems
   
   # Optimizer
   optimizer:
