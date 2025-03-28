@@ -227,7 +227,7 @@ class FutureVoxBaseModel(pl.LightningModule):
     
     def _log_f0_and_durations(self, f0, voiced_flag, phoneme_data, sr, sample_idx):
         """
-        Log F0 (fundamental frequency) and phoneme durations in a single combined visualization.
+        Log F0 (fundamental frequency) and phoneme durations in a single aligned plot.
         
         Args:
             f0: Fundamental frequency array
@@ -236,98 +236,127 @@ class FutureVoxBaseModel(pl.LightningModule):
             sr: Sample rate
             sample_idx: Index of the sample
         """
-        # Create figure with two subplots that share x-axis
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True, 
-                                        gridspec_kw={'height_ratios': [2, 1]})
+        # Create a single figure
+        fig, ax = plt.subplots(figsize=(12, 6))
         
-        # Plot F0 in the top subplot
+        # Calculate time axis for F0
         times = np.arange(len(f0)) * self.hop_length / sr
         max_time = times[-1] if len(times) > 0 else 0
         
+        # Plot F0 values
         if voiced_flag is not None:
             # Plot only voiced frames
             voiced_times = times[voiced_flag]
             voiced_f0 = f0[voiced_flag]
-            ax1.scatter(voiced_times, voiced_f0, s=10, c='b', alpha=0.8, label='F0 (voiced)')
+            ax.scatter(voiced_times, voiced_f0, s=10, c='b', alpha=0.8, label='F0 (voiced)')
         else:
             # Plot all F0 values
-            ax1.plot(times, f0, 'b-', alpha=0.7, label='F0')
+            ax.plot(times, f0, 'b-', alpha=0.7, label='F0')
         
-        # Customize F0 plot
-        ax1.set_ylabel('Frequency (Hz)')
-        ax1.set_title(f'Combined F0 and Phoneme Durations - Sample {sample_idx}')
-        ax1.grid(alpha=0.3)
-        ax1.legend()
+        # Set y-axis label for F0
+        ax.set_ylabel('Frequency (Hz)')
+        ax.set_title(f'F0 and Phoneme Durations - Sample {sample_idx}')
         
-        # Plot phoneme boundaries on F0 plot
-        y_min, y_max = ax1.get_ylim()
+        # Get y-axis limits for positioning text
+        y_min, y_max = ax.get_ylim()
         
-        # Add phoneme boundaries and labels to F0 plot
-        for phoneme in phoneme_data:
+        # Create a twin y-axis for duration information
+        duration_ax = ax.twinx()
+        duration_ax.set_ylabel('Duration (frames)', color='red')
+        duration_ax.tick_params(axis='y', labelcolor='red')
+        duration_ax.grid(axis='y', linestyle=':', color='red', alpha=0.3)
+        
+        # Color regions for each phoneme and add labels with duration
+        colors = plt.cm.Pastel1.colors
+        
+        # Add background colored regions for each phoneme
+        for i, phoneme in enumerate(phoneme_data):
             start_time = phoneme['start_time'] / sr
             end_time = phoneme['end_time'] / sr
             label = phoneme['label']
             
-            # Add vertical line at boundary
-            ax1.axvline(x=start_time, color='r', linestyle='--', alpha=0.5)
-            
-            # Add label
-            label_x = (start_time + end_time) / 2
-            ax1.text(label_x, y_max*0.9, label, 
-                    horizontalalignment='center', 
-                    verticalalignment='top',
-                    fontsize=8, 
-                    bbox=dict(facecolor='white', alpha=0.7))
-        
-        # Add final boundary
-        if phoneme_data:  # Check if there are any phonemes
-            ax1.axvline(x=phoneme_data[-1]['end_time'] / sr, color='r', linestyle='--', alpha=0.5)
-        
-        # Calculate durations in frames
-        durations = []
-        labels = []
-        time_positions = []  # Store time positions for x-axis alignment
-        
-        for phoneme in phoneme_data:
-            # Convert from sample indices to frames
+            # Calculate duration in frames
             start_frame = phoneme['start_time'] // self.hop_length
             end_frame = phoneme['end_time'] // self.hop_length
-            duration = max(1, end_frame - start_frame)  # Ensure positive duration
+            duration = max(1, end_frame - start_frame)
             
-            # Calculate time positions for bar chart
-            start_time = phoneme['start_time'] / sr
-            time_positions.append(start_time)
+            # Create colored background region for this phoneme
+            color_idx = i % len(colors)
+            ax.axvspan(start_time, end_time, 
+                    alpha=0.2, 
+                    color=colors[color_idx],
+                    zorder=0)  # Put background behind F0 points
             
-            durations.append(duration)
-            labels.append(phoneme['label'])
+            # Add label with duration
+            label_x = (start_time + end_time) / 2
+            
+            # Add phoneme label at the top
+            ax.text(label_x, y_max*0.95, 
+                    label, 
+                    ha='center', 
+                    va='top',
+                    fontsize=10, 
+                    bbox=dict(facecolor='white', alpha=0.7))
+            
+            # Add duration label at the bottom
+            ax.text(label_x, y_min*0.95, 
+                    f'{duration} frames', 
+                    ha='center', 
+                    va='bottom',
+                    fontsize=8,
+                    color='red',
+                    bbox=dict(facecolor='white', alpha=0.7))
+                    
+            # Plot a red dot with connecting line on the duration axis to represent the duration value
+            duration_ax.scatter(label_x, duration, color='red', s=30, alpha=0.7, zorder=5)
+            
+            # Add a vertical line connecting the dot to the time axis
+            duration_ax.plot([label_x, label_x], [0, duration], 'r-', alpha=0.3, linestyle=':', zorder=4)
         
-        # Create bar chart with proper x-axis alignment
-        if durations:  # Check if there are any durations
-            bar_width = []
-            for i in range(len(time_positions)):
-                if i < len(time_positions) - 1:
-                    # Width is the distance to the next time position
-                    width = time_positions[i+1] - time_positions[i]
-                else:
-                    # For the last element, use the same width as previous
-                    # or a fraction of the total time
-                    width = max_time * 0.05 if i == 0 else (time_positions[i] - time_positions[i-1])
-                bar_width.append(width)
-            
-            bars = ax2.bar(time_positions, durations, width=bar_width, alpha=0.7)
-            
-            # Add labels
-            for i, (x, v) in enumerate(zip(time_positions, durations)):
-                ax2.text(x + bar_width[i]/2, v + 0.5, str(v), ha='center', fontsize=8)
+        # Add vertical lines at phoneme boundaries
+        for phoneme in phoneme_data:
+            ax.axvline(x=phoneme['start_time']/sr, color='gray', linestyle='--', alpha=0.5)
         
-        # Customize durations plot
-        ax2.set_xlabel('Time (s)')
-        ax2.set_ylabel('Duration (frames)')
-        ax2.set_xlim(0, max_time)
-        ax2.grid(axis='y', alpha=0.3)
+        # Add final boundary
+        if phoneme_data:
+            ax.axvline(x=phoneme_data[-1]['end_time']/sr, color='gray', linestyle='--', alpha=0.5)
         
-        # Add a title to clarify this is the duration plot
-        ax2.set_title('Phoneme Durations (frames)', fontsize=10)
+        # Set axis labels and limits
+        ax.set_xlabel('Time (s)')
+        ax.set_xlim(0, max_time)
+        
+        # Adjust the scale of the duration axis based on max duration
+        max_duration = max([
+            (phoneme['end_time'] // self.hop_length) - (phoneme['start_time'] // self.hop_length)
+            for phoneme in phoneme_data
+        ]) if phoneme_data else 0
+        
+        duration_ax.set_ylim(0, max_duration * 1.2)  # Add some headroom
+        
+        # Create a connected duration curve for better visualization
+        if phoneme_data:
+            duration_times = []
+            duration_values = []
+            
+            # Add points at each phoneme boundary
+            for phoneme in phoneme_data:
+                start_time = phoneme['start_time'] / sr
+                end_time = phoneme['end_time'] / sr
+                
+                start_frame = phoneme['start_time'] // self.hop_length
+                end_frame = phoneme['end_time'] // self.hop_length
+                duration = max(1, end_frame - start_frame)
+                
+                # Add both start and end points to create a step function
+                duration_times.extend([start_time, end_time])
+                duration_values.extend([duration, duration])
+            
+            # Plot the connected duration curve
+            duration_ax.plot(duration_times, duration_values, 'r-', alpha=0.6, linewidth=2, zorder=3, label='Duration')
+        
+        # Add legends
+        ax.legend(loc='upper left')
+        duration_ax.legend(loc='upper right')
         
         plt.tight_layout()
         
