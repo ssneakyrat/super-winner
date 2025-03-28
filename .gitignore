@@ -3,7 +3,7 @@ futurevox/datasets/
 futurevox/outputs/
 futurevox/test/
 futurevox/logs/
-futurevox/check/
+futurevox/checkpoints/
 *.pyc
 *.ipynb
 *.png

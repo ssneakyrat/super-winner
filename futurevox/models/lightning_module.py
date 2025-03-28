@@ -36,8 +36,7 @@ class FutureVoxLightningModule(pl.LightningModule):
     
     def training_step(self, batch, batch_idx):
         """
-        Empty training step as required.
-        In a real implementation, this would compute losses and update the model.
+        Training step with a loss that's properly connected to model parameters.
         """
         # Get model outputs
         outputs = self(
@@ -48,11 +47,12 @@ class FutureVoxLightningModule(pl.LightningModule):
             batch['phone_masks']
         )
         
-        # For now, just return a dummy loss
-        dummy_loss = torch.tensor(0.0, device=self.device, requires_grad=True)
+        # Create a dummy loss that's connected to model parameters
+        # This ensures the loss is part of the computation graph
+        dummy_loss = outputs['encoded_mel'].mean() * 0.0
         
         # Log loss
-        self.log('train_loss', dummy_loss, prog_bar=True)
+        self.log('train_loss', dummy_loss, prog_bar=True, batch_size=batch['mel_spectrograms'].size(0))
         
         return dummy_loss
     
