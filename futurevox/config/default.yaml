@@ -1,22 +1,97 @@
+# FutureVox-Singer Configuration
+
 # Datasets
 datasets:
   data_raw: "datasets/gin"
   data_set: "datasets/gin/binary/gin.h5"
   
-# Audio
+# Audio parameters
 audio:
   sample_rate: 22050
-  n_fft: 1024 #1024
-  hop_length: 256 #512
+  n_fft: 1024
+  win_length: 1024
+  hop_length: 256
   n_mels: 80
-  fmin: 50
-  fmax: 1000
+  fmin: 30  # Lower minimum frequency to better capture bass voices
+  fmax: 8000  # Higher maximum frequency for better high-frequency resolution
+  f0_min: 65  # Minimum F0 for singing voice
+  f0_max: 1200  # Maximum F0 for singing voice
+
+# Model parameters
+model:
+  # Phoneme encoder parameters
+  phoneme_encoder:
+    d_model: 256
+    num_layers: 4
+    num_heads: 8
+    d_ff: 1024
+    dropout: 0.1
+    max_seq_len: 1000
+    
+  # Variance adaptor parameters
+  variance_adaptor:
+    d_model: 256
+    dropout: 0.1
+    use_singer_embedding: True
+    singer_emb_dim: 64
+    num_singers: 10  # Will be overridden by dataset preprocessing
+    
+  # Acoustic decoder parameters
+  acoustic_decoder:
+    d_model: 256
+    num_layers: 6
+    num_heads: 8
+    d_ff: 1024
+    dropout: 0.1
+    use_ref_encoder: True
+    ref_enc_filters: [32, 32, 64, 64, 128, 128]
+    ref_enc_kernel_size: 3
+    ref_enc_strides: 2
+    ref_enc_gru_size: 128
+    upsample_scales: [2, 2, 2, 2]
+    conv_kernel_sizes: [8, 8, 4, 4]
+    
+  # Vocoder parameters
+  vocoder:
+    upsample_rates: [8, 8, 2, 2]
+    upsample_kernel_sizes: [16, 16, 4, 4]
+    upsample_initial_channel: 512
+    resblock_kernel_sizes: [3, 7, 11]
+    resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
 
 # Training parameters
 training:
-  max_epochs: 5
+  max_epochs: 1 #100
   batch_size: 16
   num_workers: 4
   learning_rate: 1e-4
-  hidden_dim: 256
-  checkpoint_dir: "checkpoints"
+  weight_decay: 1e-6
+  grad_clip_val: 1.0
+  checkpoint_dir: "checkpoints/futurevox_singer"
+  train_vocoder: True  # Whether to train the vocoder along with the model
+  progressive: True  # Whether to use progressive training
+  phase_epochs:  # Epochs for each training phase in progressive training
+    phoneme_encoder: 10
+    variance_adaptor: 10
+    acoustic_decoder: 20
+    vocoder: 10
+    all: 50
+    
+# Loss weights
+loss_weights:
+  f0_loss: 1.0
+  duration_loss: 1.0
+  energy_loss: 0.5
+  mel_loss: 1.0
+  mel_postnet_loss: 1.0
+  vocoder_gen_loss: 1.0
+  vocoder_disc_loss: 1.0
+  
+# Inference parameters
+inference:
+  output_dir: "outputs/synthesis"
+  # Default inference parameters (can be overridden during inference)
+  tempo_factor: 1.0
+  energy_scale: 1.0
+  f0_scale: 1.0
+  vibrato_scale: 1.0

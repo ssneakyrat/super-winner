@@ -2,157 +2,304 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from models.singer_modules.phoneme_encoder import EnhancedPhonemeEncoder
+from models.singer_modules.variance_adaptor import AdvancedVarianceAdaptor
+from models.singer_modules.acoustic_decoder import AcousticDecoder
+from models.singer_modules.hifi_gan_vocoder import HiFiGANVocoder
 
-class FutureVoxEncoder(nn.Module):
-    """Encoder module for FutureVox."""
-    
-    def __init__(self, config):
-        super().__init__()
-        hidden_dim = config['training']['hidden_dim']
-        
-        # Define encoder layers
-        self.conv_layers = nn.ModuleList([
-            nn.Conv1d(config['audio']['n_mels'], hidden_dim, kernel_size=5, padding=2),
-            nn.Conv1d(hidden_dim, hidden_dim, kernel_size=5, padding=2),
-            nn.Conv1d(hidden_dim, hidden_dim, kernel_size=5, padding=2),
-        ])
-        
-        self.norm_layers = nn.ModuleList([
-            nn.BatchNorm1d(hidden_dim),
-            nn.BatchNorm1d(hidden_dim),
-            nn.BatchNorm1d(hidden_dim),
-        ])
-        
-        # Final projection
-        self.projection = nn.Conv1d(hidden_dim, hidden_dim, kernel_size=1)
-        
-    def forward(self, mel_spectrograms, mel_masks=None):
-        """
-        Forward pass through the encoder.
-        
-        Args:
-            mel_spectrograms: Tensor of shape [B, n_mels, T]
-            mel_masks: Tensor of shape [B, T] where True indicates padding
-            
-        Returns:
-            encoded: Tensor of shape [B, hidden_dim, T]
-        """
-        x = mel_spectrograms
-        
-        # Apply convolutional layers
-        for conv, norm in zip(self.conv_layers, self.norm_layers):
-            x = F.relu(norm(conv(x)))
-        
-        # Final projection
-        encoded = self.projection(x)
-        
-        # Apply mask if provided
-        if mel_masks is not None:
-            encoded = encoded.masked_fill(mel_masks.unsqueeze(1), 0.0)
-            
-        return encoded
-
-
-class FutureVoxPhonemeEncoder(nn.Module):
-    """Encodes phoneme information."""
-    
-    def __init__(self, config, num_phonemes=100):  # Default value, adjust based on your phoneme inventory
-        super().__init__()
-        hidden_dim = config['training']['hidden_dim']
-        
-        # Phoneme embedding
-        self.phoneme_embedding = nn.Embedding(num_phonemes, hidden_dim)
-        
-        # Projection
-        self.projection = nn.Linear(hidden_dim, hidden_dim)
-        
-    def forward(self, phone_indices, phone_masks=None):
-        """
-        Forward pass through the phoneme encoder.
-        
-        Args:
-            phone_indices: Tensor of shape [B, L] with phoneme indices
-            phone_masks: Tensor of shape [B, L] where True indicates padding
-            
-        Returns:
-            encoded_phonemes: Tensor of shape [B, L, hidden_dim]
-        """
-        # Get phoneme embeddings
-        phoneme_embeddings = self.phoneme_embedding(phone_indices)
-        
-        # Apply projection
-        encoded_phonemes = F.relu(self.projection(phoneme_embeddings))
-        
-        # Apply mask if provided
-        if phone_masks is not None:
-            encoded_phonemes = encoded_phonemes.masked_fill(phone_masks.unsqueeze(-1), 0.0)
-            
-        return encoded_phonemes
-
-
-class FutureVoxModel(nn.Module):
-    """Main FutureVox model."""
-    
-    def __init__(self, config, num_phonemes=100):
+class FutureVoxSinger(nn.Module):
+    """
+    FutureVox-Singer: Advanced singing voice synthesis model.
+    """
+    def __init__(self, config, num_phonemes=100, num_notes=128, num_singers=10):
         super().__init__()
         self.config = config
-        hidden_dim = config['training']['hidden_dim']
         
-        # Encoders
-        self.encoder = FutureVoxEncoder(config)
-        self.phoneme_encoder = FutureVoxPhonemeEncoder(config, num_phonemes)
-        
-        # F0 predictor (pitch prediction)
-        self.f0_predictor = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1)
+        # 1. Enhanced Phoneme Encoder
+        self.phoneme_encoder = EnhancedPhonemeEncoder(
+            config, 
+            num_phonemes=num_phonemes,
+            num_notes=num_notes
         )
         
-        # Duration predictor
-        self.duration_predictor = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1)
-        )
+        # 2. Advanced Variance Adaptor
+        variance_config = config.copy()
+        variance_config['variance_adaptor'] = variance_config.get('variance_adaptor', {})
+        variance_config['variance_adaptor']['num_singers'] = num_singers
         
-    def forward(self, mel_spectrograms, phone_indices, frames=None, mel_masks=None, phone_masks=None):
+        self.variance_adaptor = AdvancedVarianceAdaptor(variance_config)
+        
+        # 3. Acoustic Decoder
+        self.acoustic_decoder = AcousticDecoder(config)
+        
+        # 4. HiFi-GAN Vocoder
+        self.vocoder = HiFiGANVocoder(config)
+        
+        # Track whether vocoder is trainable
+        self.train_vocoder = config.get('training', {}).get('train_vocoder', False)
+        
+    def forward(self, batch, phase='all'):
         """
-        Forward pass through the model.
+        Forward pass through the complete model.
         
         Args:
-            mel_spectrograms: Tensor of shape [B, n_mels, T]
-            phone_indices: Tensor of shape [B, L] with phoneme indices
-            frames: Tensor of shape [B, L, 2] with start and end frames for each phoneme
-            mel_masks: Tensor of shape [B, T] where True indicates padding
-            phone_masks: Tensor of shape [B, L] where True indicates padding
+            batch: Dictionary containing input tensors
+            phase: Training phase ('phoneme_encoder', 'variance_adaptor', 
+                                 'acoustic_decoder', 'vocoder', or 'all')
             
         Returns:
             output_dict: Dictionary containing model outputs
         """
-        # Encode mel spectrograms
-        encoded_mel = self.encoder(mel_spectrograms, mel_masks)
+        # Initialize output dictionary
+        output_dict = {}
         
-        # Encode phonemes
-        encoded_phonemes = self.phoneme_encoder(phone_indices, phone_masks)
+        # Get input tensors
+        phone_indices = batch['phone_indices']
+        phone_masks = batch['phone_masks'] if 'phone_masks' in batch else None
+        note_indices = batch.get('note_indices', None)
+        rhythm_info = batch.get('rhythm_info', None)
+        singer_ids = batch.get('singer_ids', None)
+        mel_spectrograms = batch.get('mel_spectrograms', None)
+        waveform = batch.get('audio', None)
         
-        # For each phoneme, extract the corresponding acoustic features
-        # In a real implementation, you would align phonemes with acoustic features
-        # For now, we'll just use a dummy approach
+        # Always get ground truth data for training if available
+        ground_truth = None
+        if 'f0_values' in batch and 'durations' in batch:
+            ground_truth = {
+                'f0_values': batch['f0_values'],
+                'durations': batch['durations'],
+                'energy': batch.get('energy', None),
+                'mel_spectrograms': mel_spectrograms,
+                'waveform': waveform
+            }
         
-        # Predict F0 (fundamental frequency)
-        f0_predictions = self.f0_predictor(encoded_phonemes).squeeze(-1)
+        # Get expected training phase based on available inputs
+        if phase == 'auto':
+            if mel_spectrograms is not None and waveform is not None:
+                phase = 'all'
+            elif mel_spectrograms is not None:
+                phase = 'acoustic_decoder'
+            else:
+                phase = 'phoneme_encoder'
         
-        # Predict durations
-        duration_predictions = self.duration_predictor(encoded_phonemes).squeeze(-1)
-        duration_predictions = F.softplus(duration_predictions)  # Ensure positive durations
+        # 1. Phoneme Encoder
+        if phase in ['phoneme_encoder', 'variance_adaptor', 'acoustic_decoder', 'vocoder', 'all']:
+            encoded_phonemes, attn_weights = self.phoneme_encoder(
+                phone_indices, note_indices, phone_masks
+            )
+            output_dict['encoded_phonemes'] = encoded_phonemes
+            output_dict['phoneme_attention_weights'] = attn_weights
         
-        # Create output dictionary
-        output_dict = {
-            'encoded_mel': encoded_mel,
-            'encoded_phonemes': encoded_phonemes,
-            'f0_predictions': f0_predictions,
-            'duration_predictions': duration_predictions
-        }
+        # 2. Variance Adaptor
+        if phase in ['variance_adaptor', 'acoustic_decoder', 'vocoder', 'all']:
+            variance_outputs = self.variance_adaptor(
+                encoded_phonemes, phone_masks, note_indices, rhythm_info,
+                singer_ids, ground_truth=ground_truth
+            )
+            output_dict.update(variance_outputs)
+        
+        # 3. Acoustic Decoder
+        if phase in ['acoustic_decoder', 'vocoder', 'all']:
+            acoustic_outputs = self.acoustic_decoder(
+                variance_outputs['expanded_features'],
+                variance_outputs['mel_masks'],
+                ref_mels=mel_spectrograms,
+                f0=variance_outputs['f0_contour'],
+                energy=variance_outputs['energy']
+            )
+            output_dict.update(acoustic_outputs)
+        
+        # 4. Vocoder
+        if phase in ['vocoder', 'all'] and (self.training and self.train_vocoder or not self.training):
+            # Use generated mel spectrograms for vocoder input
+            vocoder_input = acoustic_outputs['mel_postnet']
+            
+            # Generate waveform
+            waveform_pred = self.vocoder(
+                vocoder_input,
+                f0=variance_outputs.get('f0_contour', None)
+            )
+            output_dict['waveform_pred'] = waveform_pred
+            
+            # If in training, calculate vocoder losses
+            if self.training and self.train_vocoder and waveform is not None:
+                gen_loss, gen_loss_dict = self.vocoder.calculate_generator_loss(
+                    waveform_pred, waveform, mel_spectrograms
+                )
+                output_dict['vocoder_gen_loss'] = gen_loss
+                output_dict['vocoder_gen_loss_dict'] = gen_loss_dict
+                
+                disc_loss, disc_loss_dict = self.vocoder.calculate_discriminator_loss(
+                    waveform_pred, waveform
+                )
+                output_dict['vocoder_disc_loss'] = disc_loss
+                output_dict['vocoder_disc_loss_dict'] = disc_loss_dict
         
         return output_dict
+    
+    def inference(self, phone_indices, note_indices=None, rhythm_info=None, 
+                 singer_id=None, tempo_factor=1.0, ref_mel=None):
+        """
+        Generate singing voice from input phonemes.
+        
+        Args:
+            phone_indices: Phoneme indices [batch_size, seq_len]
+            note_indices: Note indices [batch_size, seq_len]
+            rhythm_info: Rhythm information [batch_size, seq_len, channels]
+            singer_id: Singer identity index [batch_size]
+            tempo_factor: Factor to adjust the tempo (1.0 = normal)
+            ref_mel: Reference mel spectrogram for style transfer [batch_size, n_mels, time]
+            
+        Returns:
+            output_dict: Dictionary containing model outputs
+        """
+        self.eval()
+        output_dict = {}
+        
+        with torch.no_grad():
+            # 1. Phoneme Encoder
+            encoded_phonemes, _ = self.phoneme_encoder(phone_indices, note_indices)
+            
+            # 2. Variance Adaptor
+            variance_outputs = self.variance_adaptor(
+                encoded_phonemes, None, note_indices, rhythm_info,
+                singer_id, tempo_factor=tempo_factor
+            )
+            
+            # 3. Acoustic Decoder
+            acoustic_outputs = self.acoustic_decoder(
+                variance_outputs['expanded_features'],
+                variance_outputs['mel_masks'],
+                ref_mels=ref_mel,
+                f0=variance_outputs['f0_contour'],
+                energy=variance_outputs['energy']
+            )
+            
+            # 4. Vocoder
+            waveform = self.vocoder.inference(
+                acoustic_outputs['mel_postnet'],
+                f0=variance_outputs.get('f0_contour', None)
+            )
+            
+            # Combine outputs
+            output_dict.update(variance_outputs)
+            output_dict.update(acoustic_outputs)
+            output_dict['waveform'] = waveform
+            
+        return output_dict
+    
+    def calculate_losses(self, output_dict, batch):
+        """
+        Calculate all losses for training.
+        
+        Args:
+            output_dict: Dictionary containing model outputs
+            batch: Dictionary containing input tensors and targets
+            
+        Returns:
+            loss_dict: Dictionary containing all losses
+            total_loss: Weighted sum of all losses
+        """
+        loss_dict = {}
+        
+        # Get ground truth data
+        mel_spectrograms = batch.get('mel_spectrograms', None)
+        f0_values = batch.get('f0_values', None)
+        durations = batch.get('durations', None)
+        energy = batch.get('energy', None)
+        waveform = batch.get('audio', None)
+        
+        # 1. Phoneme encoder losses - no direct supervision
+        
+        # 2. Variance adaptor losses
+        if 'pitch_params' in output_dict and f0_values is not None:
+            # F0 prediction loss
+            f0_loss = F.l1_loss(output_dict['f0_contour'], f0_values)
+            loss_dict['f0_loss'] = f0_loss
+            
+            # Duration prediction loss
+            if 'log_durations' in output_dict and durations is not None:
+                duration_loss = F.mse_loss(output_dict['durations'], durations)
+                loss_dict['duration_loss'] = duration_loss
+            
+            # Energy prediction loss
+            if 'energy' in output_dict and energy is not None:
+                energy_loss = F.l1_loss(output_dict['energy'].squeeze(-1), energy)
+                loss_dict['energy_loss'] = energy_loss
+        
+        # 3. Acoustic decoder losses
+        if 'mel_output' in output_dict and mel_spectrograms is not None:
+            # Mel spectrogram reconstruction loss
+            mel_loss = F.l1_loss(output_dict['mel_output'], mel_spectrograms)
+            mel_postnet_loss = F.l1_loss(output_dict['mel_postnet'], mel_spectrograms)
+            
+            loss_dict['mel_loss'] = mel_loss
+            loss_dict['mel_postnet_loss'] = mel_postnet_loss
+        
+        # 4. Vocoder losses (already calculated in forward pass)
+        if 'vocoder_gen_loss' in output_dict:
+            loss_dict['vocoder_gen_loss'] = output_dict['vocoder_gen_loss']
+            
+        if 'vocoder_disc_loss' in output_dict:
+            loss_dict['vocoder_disc_loss'] = output_dict['vocoder_disc_loss']
+        
+        # Calculate weighted total loss
+        # Weights could be configured in the config file
+        weights = {
+            'f0_loss': 1.0,
+            'duration_loss': 1.0,
+            'energy_loss': 1.0,
+            'mel_loss': 1.0,
+            'mel_postnet_loss': 1.0,
+            'vocoder_gen_loss': 1.0,
+            'vocoder_disc_loss': 1.0
+        }
+        
+        total_loss = sum(loss * weights.get(name, 1.0) 
+                         for name, loss in loss_dict.items() 
+                         if isinstance(loss, torch.Tensor))
+        
+        loss_dict['total_loss'] = total_loss
+        
+        return loss_dict, total_loss
+    
+    def visualize_outputs(self, output_dict, batch):
+        """
+        Create visualizations for model outputs.
+        
+        Args:
+            output_dict: Dictionary containing model outputs
+            batch: Dictionary containing input tensors and targets
+            
+        Returns:
+            vis_dict: Dictionary with visualization tensors
+        """
+        # Initialize visualization dictionary
+        vis_dict = {}
+        
+        # Phoneme encoder visualizations
+        if 'encoded_phonemes' in output_dict and 'phoneme_attention_weights' in output_dict:
+            # Implement attention visualization
+            pass
+        
+        # Variance adaptor visualizations
+        if 'f0_contour' in output_dict:
+            # Visualize F0 predictions vs ground truth
+            if 'f0_values' in batch:
+                pass
+                
+            # Visualize duration predictions vs ground truth
+            if 'durations' in batch and 'log_durations' in output_dict:
+                pass
+        
+        # Acoustic decoder visualizations
+        if 'mel_output' in output_dict and 'mel_spectrograms' in batch:
+            # Visualize mel spectrograms
+            pass
+        
+        # Vocoder visualizations
+        if 'waveform_pred' in output_dict and 'audio' in batch:
+            # Visualize waveforms
+            pass
+        
+        return vis_dict
