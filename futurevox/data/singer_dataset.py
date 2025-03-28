@@ -4,6 +4,7 @@ import h5py
 import numpy as np
 import yaml
 import os
+import pytorch_lightning as pl  # Add this import line
 
 class SingingVoxDataset(Dataset):
     """Dataset for loading preprocessed singing voice data from HDF5 file."""
