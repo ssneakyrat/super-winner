@@ -137,7 +137,7 @@ class LightSingerDataset(Dataset):
     
     def _parse_lab_file(self, lab_path: str) -> Tuple[List[str], np.ndarray]:
         """
-        Parse .lab file to extract phonemes and durations.
+        Parse .lab file to extract phonemes and durations with improved time format handling.
         
         Args:
             lab_path: Path to .lab file
@@ -153,45 +153,58 @@ class LightSingerDataset(Dataset):
             for line in f:
                 parts = line.strip().split()
                 if len(parts) >= 3:
-                    start_time = int(parts[0])
-                    end_time = int(parts[1])
+                    start_time = float(parts[0])  # Use float instead of int for more flexibility
+                    end_time = float(parts[1])
                     phoneme = parts[2]
                     
                     phonemes.append(phoneme)
                     start_times.append(start_time)
                     end_times.append(end_time)
         
-        # Convert times to frame-level durations
+        # Check if we have valid timing data
+        if not start_times:
+            print(f"Warning: No valid timing information found in {lab_path}")
+            return phonemes, np.ones(len(phonemes), dtype=np.int64)  # Default to 1 frame per phoneme
+        
+        # Calculate appropriate time scale based on the range of values
+        max_time = end_times[-1]
         hop_size = self.config.hop_size
         sample_rate = self.config.sample_rate
         
-        # UPDATED: Check if values are in HTK format (100ns units)
-        # Compare the last end_time with reasonable audio length 
-        max_time = end_times[-1]
-        expected_max_samples = 30 * sample_rate  # Expect max 30 seconds
+        # Determine time scale based on range of values
+        time_scale = 1  # Default scale (assuming samples)
         
-        # If times appear to be in HTK format (100ns units)
-        time_scale = 1
-        if max_time > expected_max_samples * 10:  # If unreasonably large
-            time_scale = sample_rate / 10000000  # Convert from HTK 100ns units to samples
+        if max_time < 100:  # Likely in seconds
+            time_scale = sample_rate
+            print(f"Lab file {lab_path} appears to have times in seconds, using scale {time_scale}")
+        elif max_time < 100000:  # Likely in milliseconds
+            time_scale = sample_rate / 1000
+            print(f"Lab file {lab_path} appears to have times in milliseconds, using scale {time_scale}")
+        elif max_time > sample_rate * 30:  # HTK format (100ns units) or very large values
+            time_scale = sample_rate / 10000000
+            print(f"Lab file {lab_path} appears to have times in HTK format, using scale {time_scale}")
         
         # Convert from time to frame-level durations with appropriate scaling
         durations = []
         for start, end in zip(start_times, end_times):
-            # Apply scaling if needed
+            # Apply scaling
             start_sample = int(start * time_scale)
             end_sample = int(end * time_scale)
             
             # Convert from sample indices to frame indices
             start_frame = start_sample // hop_size
             end_frame = end_sample // hop_size
-            duration = end_frame - start_frame
+            
+            # Ensure at least 1 frame duration
+            duration = max(1, end_frame - start_frame)
             durations.append(duration)
         
-        durations = np.array(durations)
+        # Final check to ensure no zero durations
+        durations = np.array([max(1, d) for d in durations])
         
-        # Add proportional scaling to match mel length
-        # This can be added if needed
+        # Log some statistics for debugging
+        total_duration = np.sum(durations)
+        print(f"Parsed {len(phonemes)} phonemes with total duration {total_duration} frames from {lab_path}")
         
         # Update phoneme dictionary if needed
         for phoneme in phonemes:

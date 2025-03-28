@@ -82,7 +82,7 @@ class FutureVoxLightning(pl.LightningModule):
     
     def training_step(self, batch, batch_idx):
         """
-        Training step.
+        Training step with added duration validation.
         
         Args:
             batch: Input batch
@@ -99,6 +99,12 @@ class FutureVoxLightning(pl.LightningModule):
         mel = batch["mel"]
         mel_lengths = batch["mel_lengths"]
         
+        # Check for zero durations and fix if needed
+        if torch.sum(durations) == 0:
+            print(f"Warning: Batch {batch_idx} has all zero durations. Setting to default values.")
+            # Set to default value of 1 frame per phoneme
+            durations = torch.ones_like(durations)
+            
         # Forward pass
         outputs, losses = self.model(
             phonemes=phonemes,

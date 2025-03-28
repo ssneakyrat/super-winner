@@ -741,8 +741,8 @@ class FutureVox(nn.Module):
         """
         batch_size, seq_len, hidden_dim = x.shape
         
-        # Ensure durations are integers
-        durations = durations.long()
+        # Ensure durations are integers and at least 1
+        durations = torch.clamp_min(durations.long(), 1)
         
         # Calculate output length
         output_lengths = torch.sum(durations, dim=1)
