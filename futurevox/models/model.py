@@ -255,9 +255,15 @@ class FutureVoxSinger(nn.Module):
             'vocoder_disc_loss': 1.0
         }
         
-        total_loss = sum(loss * weights.get(name, 1.0) 
-                         for name, loss in loss_dict.items() 
-                         if isinstance(loss, torch.Tensor))
+        # Initialize with a zero tensor that has requires_grad=True
+        # Get device from any parameter in the model
+        device = next(self.parameters()).device
+        total_loss = torch.tensor(0.0, device=device, requires_grad=True)
+        
+        # Add all valid tensor losses
+        for name, loss in loss_dict.items():
+            if isinstance(loss, torch.Tensor):
+                total_loss = total_loss + loss * weights.get(name, 1.0)
         
         loss_dict['total_loss'] = total_loss
         
