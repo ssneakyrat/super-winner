@@ -1,7 +1,8 @@
 # Datasets
 datasets:
   data_raw: "datasets/gin"
-
+  data_set: "datasets/gin/binary/gin.h5"
+  
 # Audio
 audio:
   sample_rate: 22050
