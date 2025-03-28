@@ -14,7 +14,6 @@ import h5py
 import librosa
 import librosa.display
 
-
 class FutureVoxBaseModel(pl.LightningModule):
     """
     Base model for FutureVox using PyTorch Lightning.
@@ -226,6 +225,120 @@ class FutureVoxBaseModel(pl.LightningModule):
         mel_img = self._fig_to_tensor(fig)
         self.logger.experiment.add_image(f'val/mel_spectrogram/{sample_idx}', mel_img, self.global_step)
     
+    def _log_f0_and_durations(self, f0, voiced_flag, phoneme_data, sr, sample_idx):
+        """
+        Log F0 (fundamental frequency) and phoneme durations in a single combined visualization.
+        
+        Args:
+            f0: Fundamental frequency array
+            voiced_flag: Boolean array indicating voiced frames (if available)
+            phoneme_data: List of dictionaries with phoneme information
+            sr: Sample rate
+            sample_idx: Index of the sample
+        """
+        # Create figure with two subplots that share x-axis
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True, 
+                                        gridspec_kw={'height_ratios': [2, 1]})
+        
+        # Plot F0 in the top subplot
+        times = np.arange(len(f0)) * self.hop_length / sr
+        max_time = times[-1] if len(times) > 0 else 0
+        
+        if voiced_flag is not None:
+            # Plot only voiced frames
+            voiced_times = times[voiced_flag]
+            voiced_f0 = f0[voiced_flag]
+            ax1.scatter(voiced_times, voiced_f0, s=10, c='b', alpha=0.8, label='F0 (voiced)')
+        else:
+            # Plot all F0 values
+            ax1.plot(times, f0, 'b-', alpha=0.7, label='F0')
+        
+        # Customize F0 plot
+        ax1.set_ylabel('Frequency (Hz)')
+        ax1.set_title(f'Combined F0 and Phoneme Durations - Sample {sample_idx}')
+        ax1.grid(alpha=0.3)
+        ax1.legend()
+        
+        # Plot phoneme boundaries on F0 plot
+        y_min, y_max = ax1.get_ylim()
+        
+        # Add phoneme boundaries and labels to F0 plot
+        for phoneme in phoneme_data:
+            start_time = phoneme['start_time'] / sr
+            end_time = phoneme['end_time'] / sr
+            label = phoneme['label']
+            
+            # Add vertical line at boundary
+            ax1.axvline(x=start_time, color='r', linestyle='--', alpha=0.5)
+            
+            # Add label
+            label_x = (start_time + end_time) / 2
+            ax1.text(label_x, y_max*0.9, label, 
+                    horizontalalignment='center', 
+                    verticalalignment='top',
+                    fontsize=8, 
+                    bbox=dict(facecolor='white', alpha=0.7))
+        
+        # Add final boundary
+        if phoneme_data:  # Check if there are any phonemes
+            ax1.axvline(x=phoneme_data[-1]['end_time'] / sr, color='r', linestyle='--', alpha=0.5)
+        
+        # Calculate durations in frames
+        durations = []
+        labels = []
+        time_positions = []  # Store time positions for x-axis alignment
+        
+        for phoneme in phoneme_data:
+            # Convert from sample indices to frames
+            start_frame = phoneme['start_time'] // self.hop_length
+            end_frame = phoneme['end_time'] // self.hop_length
+            duration = max(1, end_frame - start_frame)  # Ensure positive duration
+            
+            # Calculate time positions for bar chart
+            start_time = phoneme['start_time'] / sr
+            time_positions.append(start_time)
+            
+            durations.append(duration)
+            labels.append(phoneme['label'])
+        
+        # Create bar chart with proper x-axis alignment
+        if durations:  # Check if there are any durations
+            bar_width = []
+            for i in range(len(time_positions)):
+                if i < len(time_positions) - 1:
+                    # Width is the distance to the next time position
+                    width = time_positions[i+1] - time_positions[i]
+                else:
+                    # For the last element, use the same width as previous
+                    # or a fraction of the total time
+                    width = max_time * 0.05 if i == 0 else (time_positions[i] - time_positions[i-1])
+                bar_width.append(width)
+            
+            bars = ax2.bar(time_positions, durations, width=bar_width, alpha=0.7)
+            
+            # Add labels
+            for i, (x, v) in enumerate(zip(time_positions, durations)):
+                ax2.text(x + bar_width[i]/2, v + 0.5, str(v), ha='center', fontsize=8)
+        
+        # Customize durations plot
+        ax2.set_xlabel('Time (s)')
+        ax2.set_ylabel('Duration (frames)')
+        ax2.set_xlim(0, max_time)
+        ax2.grid(axis='y', alpha=0.3)
+        
+        # Add a title to clarify this is the duration plot
+        ax2.set_title('Phoneme Durations (frames)', fontsize=10)
+        
+        plt.tight_layout()
+        
+        # Convert figure to tensor and log to TensorBoard
+        combined_img = self._fig_to_tensor(fig)
+        self.logger.experiment.add_image(
+            f'val/f0_and_durations/{sample_idx}', 
+            combined_img, 
+            self.global_step
+        )
+        
     def _log_sample_data(self, sample_idx, mel_spec):
         """
         Log sample data (F0, phonemes, durations) to TensorBoard.
@@ -242,18 +355,18 @@ class FutureVoxBaseModel(pl.LightningModule):
             if 'sample_rate' in hf[sample_key]:
                 sr = hf[sample_key]['sample_rate'][()]
             
-            # Log F0 if available
+            # Collect F0 data if available
+            f0 = None 
+            voiced_flag = None
             if 'f0' in hf[sample_key]:
                 f0 = hf[sample_key]['f0'][()]
-                voiced_flag = None
                 if 'voiced_flag' in hf[sample_key]:
                     voiced_flag = hf[sample_key]['voiced_flag'][()]
-                self._log_f0(f0, voiced_flag, sample_idx, sr)
             
-            # Log phonemes if available
+            # Collect phoneme data if available
+            phoneme_data = []
             if 'phonemes' in hf[sample_key] and 'phoneme_count' in hf[sample_key]:
                 phoneme_count = hf[sample_key]['phoneme_count'][()]
-                phoneme_data = []
                 
                 for i in range(phoneme_count):
                     phoneme_key = f'phoneme{i}'
@@ -268,13 +381,24 @@ class FutureVoxBaseModel(pl.LightningModule):
                             'end_time': phoneme['end_time'][()],
                             'label': label
                         })
+        
+        # Log combined F0 and durations if both are available
+        if f0 is not None and phoneme_data:
+            self._log_f0_and_durations(f0, voiced_flag, phoneme_data, sr, sample_idx)
+            
+            # Still log phoneme alignment as before
+            self._log_phonemes(phoneme_data, mel_spec.cpu().numpy(), sr, sample_idx)
+        else:
+            # Log individually if one is missing
+            if f0 is not None:
+                self._log_f0(f0, voiced_flag, sample_idx, sr)
+            
+            if phoneme_data:
+                # Log phoneme alignment
+                self._log_phonemes(phoneme_data, mel_spec.cpu().numpy(), sr, sample_idx)
                 
-                if phoneme_data:
-                    # Log phoneme alignment
-                    self._log_phonemes(phoneme_data, mel_spec.cpu().numpy(), sr, sample_idx)
-                    
-                    # Calculate and log durations
-                    self._log_durations(phoneme_data, sr, sample_idx)
+                # Calculate and log durations
+                self._log_durations(phoneme_data, sr, sample_idx)
     
     def _log_f0(self, f0, voiced_flag, sample_idx, sr):
         """Log F0 (fundamental frequency) to TensorBoard."""
