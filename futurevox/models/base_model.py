@@ -369,7 +369,7 @@ class FutureVoxBaseModel(pl.LightningModule):
 
     def _log_f0_with_phonemes(self, f0, voiced_flag, phoneme_data, mel_spec, sr, sample_idx):
         """
-        Log combined F0 and phoneme alignment to TensorBoard.
+        Log combined F0 and phoneme alignment to TensorBoard using a single plot approach.
         
         Args:
             f0: Fundamental frequency array
@@ -379,64 +379,74 @@ class FutureVoxBaseModel(pl.LightningModule):
             sr: Sample rate
             sample_idx: Index of the sample
         """
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
+        # Create a single figure
+        fig, ax = plt.subplots(figsize=(12, 6))
         
-        # Plot the mel spectrogram on the top subplot
+        # Plot the mel spectrogram
         img = librosa.display.specshow(
             mel_spec, 
             sr=sr, 
             hop_length=self.hop_length, 
             x_axis='time', 
             y_axis='mel', 
-            ax=ax1
+            ax=ax
         )
-        fig.colorbar(img, ax=ax1, format='%+2.0f dB')
+        fig.colorbar(img, ax=ax, format='%+2.0f dB')
         
-        # Get y-axis limits for placing text
-        y_min, y_max = ax1.get_ylim()
-        
-        # Add phoneme boundaries and labels to both subplots
-        for phoneme in phoneme_data:
-            start_time = phoneme['start_time'] / sr
-            end_time = phoneme['end_time'] / sr
-            label = phoneme['label']
-            
-            # Add vertical line at boundary on both plots
-            ax1.axvline(x=start_time, color='r', linestyle='--', alpha=0.7)
-            ax2.axvline(x=start_time, color='r', linestyle='--', alpha=0.7)
-            
-            # Add label text to the top plot
-            label_x = (start_time + end_time) / 2
-            ax1.text(label_x, y_max*0.9, label, 
-                    horizontalalignment='center', 
-                    verticalalignment='center',
-                    fontsize=10, 
-                    bbox=dict(facecolor='white', alpha=0.7))
-        
-        # Add final boundary to both plots
-        if phoneme_data:
-            ax1.axvline(x=phoneme_data[-1]['end_time'] / sr, color='r', linestyle='--', alpha=0.7)
-            ax2.axvline(x=phoneme_data[-1]['end_time'] / sr, color='r', linestyle='--', alpha=0.7)
-        
-        # Plot F0 on the bottom subplot
         # Calculate time axis for F0
         times = np.arange(len(f0)) * self.hop_length / sr
+        
+        # Overlay F0 on the same plot
+        ax_f0 = ax.twinx()  # Create secondary y-axis for F0
         
         if voiced_flag is not None:
             # Plot only voiced frames
             voiced_times = times[voiced_flag]
             voiced_f0 = f0[voiced_flag]
-            ax2.scatter(voiced_times, voiced_f0, s=10, c='b', alpha=0.8, label='F0 (voiced)')
+            ax_f0.scatter(voiced_times, voiced_f0, s=10, c='b', alpha=0.8, label='F0 (voiced)')
         else:
             # Plot all F0 values
-            ax2.plot(times, f0, 'b-', alpha=0.7, label='F0')
+            ax_f0.plot(times, f0, 'b-', alpha=0.7, label='F0')
         
-        # Set labels and titles
-        ax1.set_title(f'Mel Spectrogram with Phoneme Alignment - Sample {sample_idx}')
-        ax2.set_xlabel('Time (s)')
-        ax2.set_ylabel('Frequency (Hz)')
-        ax2.set_title('Fundamental Frequency (F0)')
-        ax2.legend()
+        # Set F0 axis range
+        f0_min = 0
+        f0_max = max(f0) * 1.1  # Add some padding
+        ax_f0.set_ylim([f0_min, f0_max])
+        ax_f0.set_ylabel('F0 (Hz)', color='b')
+        ax_f0.tick_params(axis='y', labelcolor='b')
+        
+        # Get y-axis limits for placing text
+        y_min, y_max = ax.get_ylim()
+        
+        # Add phoneme boundaries and labels
+        for phoneme in phoneme_data:
+            start_time = phoneme['start_time'] / sr
+            end_time = phoneme['end_time'] / sr
+            label = phoneme['label']
+            
+            # Add vertical line at boundary
+            ax.axvline(x=start_time, color='r', linestyle='--', alpha=0.7)
+            
+            # Add label text
+            label_x = (start_time + end_time) / 2
+            ax.text(label_x, y_max*0.9, label, 
+                horizontalalignment='center', 
+                verticalalignment='center',
+                fontsize=10, 
+                bbox=dict(facecolor='white', alpha=0.7))
+        
+        # Add final boundary
+        if phoneme_data:
+            ax.axvline(x=phoneme_data[-1]['end_time'] / sr, color='r', linestyle='--', alpha=0.7)
+        
+        # Set titles and labels
+        ax.set_title(f'Mel Spectrogram with F0 and Phoneme Alignment - Sample {sample_idx}')
+        ax.set_xlabel('Time (s)')
+        
+        # Add legend for F0
+        handles, labels = ax_f0.get_legend_handles_labels()
+        if handles:
+            ax_f0.legend(handles, labels, loc='upper right')
         
         # Adjust layout
         plt.tight_layout()
